@@ -1,0 +1,1116 @@
+// =============================================================================
+// Settings panel
+// =============================================================================
+//
+// Translation of `components/page-toolbar-css/settings-panel/styles.module.scss`
+// together with the three React components it composed — `switch`, `checkbox`
+// and `help-tooltip`/`tooltip` — whose visuals now live in this namespace.
+//
+// Three structural differences from the original, all forced by the shadow root:
+//
+//  1. The panel was a child of `.toolbarContainer`, which gave it both a
+//     containing block and the toolbar's placement. Regions are siblings under
+//     one shadow root and `:host` is `display: contents`, so `.ag-settings` is
+//     itself `position: fixed` and mirrors the toolbar's placement contract —
+//     the same four inherited variables, the same 337 px width, and the 44 px
+//     container height that `bottom: calc(100% + 0.5rem)` measures against.
+//     `.ag-settings-panel` then anchors to that box exactly as it used to, and
+//     no descendant resolves against the initial containing block.
+//  2. The help tooltip was a `document.body` portal. It is now a fixed-position
+//     child of the root rather than of the panel: the panel's `overflow: hidden`
+//     plus its `filter` would clip and blur a fixed-position descendant.
+//  3. Dark is the base theme (see `_tokens.scss`), so the original's
+//     `[data-agentation-theme="dark"] &` overrides are folded into the base
+//     declarations and only light needs `:host([data-agentation-theme="light"])`.
+//
+// Everything else — every dimension, duration, easing curve and literal colour —
+// is copied so the frozen visual snapshots still match.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Keyframes
+// -----------------------------------------------------------------------------
+
+@keyframes ag-settings-cycle-text-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ag-settings-theme-icon-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) rotate(-30deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes ag-settings-mcp-pulse {
+  0% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--agentation-color-green) 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px
+      color-mix(in srgb, var(--agentation-color-green) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--agentation-color-green) 0%, transparent);
+  }
+}
+
+@keyframes ag-settings-mcp-pulse-error {
+  0% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--agentation-color-red) 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px
+      color-mix(in srgb, var(--agentation-color-red) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--agentation-color-red) 0%, transparent);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Root: the toolbar's placement box
+// -----------------------------------------------------------------------------
+
+.ag-settings {
+  position: fixed;
+  top: var(--agentation-toolbar-top, auto);
+  right: var(--agentation-toolbar-right, 1.25rem);
+  bottom: var(--agentation-toolbar-bottom, 1.25rem);
+  left: var(--agentation-toolbar-left, auto);
+  width: 337px;
+  // `.ag-toolbar-container` is 44 px tall in both its collapsed and expanded
+  // states, so matching it keeps `bottom: calc(100% + 0.5rem)` landing 0.5rem
+  // above the toolbar's top edge — variable-placed or dragged.
+  height: 44px;
+  z-index: var(--agentation-z-index, 100000);
+  font-family: var(--agentation-font);
+  pointer-events: none;
+  // A dragged position must apply instantly, as it does on the toolbar.
+  transition:
+    left 0s,
+    top 0s,
+    right 0s,
+    bottom 0s;
+}
+
+.ag-settings,
+.ag-settings *,
+.ag-settings *::before,
+.ag-settings *::after {
+  box-sizing: border-box;
+}
+
+// `:where()` keeps these resets at element specificity so every component rule
+// below wins without `!important`: `.ag-settings button` would otherwise beat
+// `.ag-settings-cycle`'s font-size, and `.ag-settings p` would beat the
+// automation description's margin. `cursor` is deliberately absent — the
+// original declared it per control and the help trigger needs `help`.
+:where(.ag-settings) button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+// The UA stylesheet still applies inside a shadow root, so the paragraphs that
+// used to inherit the host page's reset need one here.
+:where(.ag-settings) p {
+  margin: 0;
+}
+
+.ag-settings :is(button, a, input, textarea):focus-visible {
+  outline: 2px solid var(--agentation-color-accent);
+  outline-offset: 2px;
+}
+
+// -----------------------------------------------------------------------------
+// Panel
+// -----------------------------------------------------------------------------
+
+.ag-settings-panel {
+  position: absolute;
+  right: 5px;
+  bottom: calc(100% + 0.5rem);
+  overflow: hidden;
+  background: #1a1a1a;
+  border-radius: 16px;
+  padding: 12px 0;
+  width: 100%;
+  max-width: 253px;
+  min-width: 205px;
+  cursor: default;
+  pointer-events: auto;
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition:
+    background-color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+// The original flipped placement with an inline style when the dragged toolbar
+// sat near the top of the viewport.
+.ag-settings-panel.ag-settings-panel-below {
+  bottom: auto;
+  top: calc(100% + 0.5rem);
+}
+
+// Edge fades. The original left these at #1c1c1c even in dark mode, where the
+// panel is #1a1a1a; the two are indistinguishable and the snapshots are frozen.
+.ag-settings-panel::before,
+.ag-settings-panel::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.ag-settings-panel::before {
+  left: 0;
+  background: linear-gradient(to right, #1c1c1c 0%, transparent 100%);
+}
+
+.ag-settings-panel::after {
+  right: 0;
+  background: linear-gradient(to left, #1c1c1c 0%, transparent 100%);
+}
+
+// Theme cross-fade for everything that carries a themed colour. Written as a
+// descendant rule — exactly as the original — because the extra specificity is
+// load-bearing: it intentionally overrides `.ag-settings-cycle-dot`'s own
+// transition, so the dots animate colour but not scale.
+.ag-settings-panel
+  :is(
+    .ag-settings-header,
+    .ag-settings-brand,
+    .ag-settings-version,
+    .ag-settings-section,
+    .ag-settings-label,
+    .ag-settings-cycle,
+    .ag-settings-cycle-dot,
+    .ag-settings-theme-toggle
+  ) {
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.ag-settings-panel.ag-settings-enter {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease,
+    filter 0.2s ease;
+}
+
+.ag-settings-panel.ag-settings-exit {
+  opacity: 0;
+  transform: translateY(8px) scale(0.95);
+  filter: blur(5px);
+  pointer-events: none;
+  transition:
+    opacity 0.1s ease,
+    transform 0.1s ease,
+    filter 0.1s ease;
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-panel {
+  background: #fff;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    0 4px 16px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-panel::before {
+  background: linear-gradient(to right, #fff 0%, transparent 100%);
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-panel::after {
+  background: linear-gradient(to left, #fff 0%, transparent 100%);
+}
+
+.ag-settings-container {
+  overflow: visible;
+  position: relative;
+  display: flex;
+  padding: 0 16px;
+}
+
+// -----------------------------------------------------------------------------
+// Pages (main / automations)
+// -----------------------------------------------------------------------------
+
+.ag-settings-page {
+  min-width: 100%;
+  flex-basis: 0;
+  flex-shrink: 0;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+  transition-delay: 0s;
+  opacity: 1;
+}
+
+.ag-settings-page.ag-settings-slide-left {
+  transform: translateX(-24px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ag-settings-automations-page {
+  position: absolute;
+  top: 0;
+  left: 24px;
+  width: 100%;
+  height: 100%;
+  padding: 0 16px 4px;
+  display: flex;
+  flex-direction: column;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ag-settings-automations-page.ag-settings-slide-in {
+  transform: translateX(-24px);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+// -----------------------------------------------------------------------------
+// Header
+// -----------------------------------------------------------------------------
+
+.ag-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+}
+
+// `display` stays at the anchor default: the wordmark is an inline SVG and its
+// baseline alignment is part of the frozen header metrics.
+.ag-settings-brand {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.0094em;
+  color: #fff;
+  text-decoration: none;
+}
+
+.ag-settings-version {
+  font-size: 11px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.4);
+  margin-left: auto;
+  letter-spacing: -0.0094em;
+}
+
+.ag-settings-theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgb(255 255 255 / 0.4);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+  }
+}
+
+.ag-settings-theme-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 20px;
+  height: 20px;
+}
+
+// Two retained slots, one per glyph. Toggling `display` restarts the entrance
+// animation, which is what the original's changing React `key` did.
+.ag-settings-theme-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: ag-settings-theme-icon-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)
+    forwards;
+}
+
+.ag-settings-theme-icon[hidden] {
+  display: none;
+}
+
+:host([data-agentation-theme="light"]) {
+  .ag-settings-brand {
+    color: #e5484d;
+  }
+
+  .ag-settings-version {
+    color: rgba(0, 0, 0, 0.4);
+  }
+
+  .ag-settings-theme-toggle {
+    color: rgba(0, 0, 0, 0.4);
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.06);
+      color: rgba(0, 0, 0, 0.7);
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Sections, rows, dividers
+// -----------------------------------------------------------------------------
+
+.ag-settings-divider {
+  margin-block: 8px;
+  width: 100%;
+  height: 1px;
+  background-color: rgb(255 255 255 / 0.07);
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-divider {
+  background-color: rgb(26 26 26 / 0.07);
+}
+
+.ag-settings-section-grow {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.ag-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+
+  &.ag-settings-row-margin-top {
+    margin-top: 8px;
+  }
+}
+
+.ag-settings-label {
+  display: flex;
+  align-items: center;
+  column-gap: 2px;
+  line-height: 20px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.15px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.ag-settings-row-disabled .ag-settings-label {
+  color: rgba(255, 255, 255, 0.2);
+}
+
+:host([data-agentation-theme="light"]) {
+  .ag-settings-label {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .ag-settings-row-disabled .ag-settings-label {
+    color: rgba(0, 0, 0, 0.2);
+  }
+}
+
+// A `<label>` inside `.ag-settings-label` binds the row text to its control. It
+// inherits every typographic property, so the row renders unchanged.
+.ag-settings-label label {
+  cursor: pointer;
+}
+
+.ag-settings-row-disabled .ag-settings-label label {
+  cursor: not-allowed;
+}
+
+// -----------------------------------------------------------------------------
+// Output detail cycle button
+// -----------------------------------------------------------------------------
+
+.ag-settings-cycle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #fff;
+  cursor: pointer;
+  letter-spacing: -0.0094em;
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+// Two retained slots, alternating so the entrance animation replays on change.
+.ag-settings-cycle-text {
+  display: inline-block;
+  animation: ag-settings-cycle-text-in 0.2s ease-out;
+}
+
+.ag-settings-cycle-text[hidden] {
+  display: none;
+}
+
+.ag-settings-cycle-dots {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ag-settings-cycle-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(0.667);
+
+  &.is-active {
+    background: #fff;
+    transform: scale(1);
+  }
+}
+
+:host([data-agentation-theme="light"]) {
+  .ag-settings-cycle {
+    color: rgba(0, 0, 0, 0.85);
+  }
+
+  .ag-settings-cycle-dot {
+    background: rgba(0, 0, 0, 0.2);
+
+    &.is-active {
+      background: rgba(0, 0, 0, 0.7);
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Marker colour swatches
+// -----------------------------------------------------------------------------
+
+.ag-settings-color-options {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  height: 26px;
+}
+
+.ag-settings-color-option {
+  padding: 0;
+  position: relative;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  background-color: #1a1a1a;
+  cursor: pointer;
+
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background-color: var(--swatch);
+    transition:
+      opacity 0.2s,
+      transform 0.2s;
+
+    // The original assigned the wide-gamut swatch to an unused custom property
+    // here, so the rendered colour has always been the sRGB one. Reproduced
+    // verbatim: reading `--swatch-p3` instead would shift the frozen snapshots.
+    @supports (color: color(display-p3 0 0 0)) {
+      --color: var(--swatch-p3);
+    }
+  }
+
+  &::after {
+    z-index: -1;
+    transform: scale(1.2);
+    opacity: 0;
+  }
+
+  &.is-selected {
+    &::before {
+      transform: scale(0.8);
+    }
+
+    &::after {
+      opacity: 1;
+    }
+  }
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-color-option {
+  background-color: #fff;
+}
+
+// -----------------------------------------------------------------------------
+// Checkbox fields
+// -----------------------------------------------------------------------------
+
+.ag-settings-checkbox-field {
+  display: flex;
+  align-items: center;
+  height: 24px;
+
+  &:not(:first-child) {
+    margin-top: 8px;
+  }
+}
+
+.ag-settings-checkbox-label {
+  padding-inline: 8px 2px;
+  line-height: 20px;
+  font-size: 13px;
+  letter-spacing: -0.15px;
+  color: rgb(255 255 255 / 0.5);
+  cursor: pointer;
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-checkbox-label {
+  color: rgb(26 26 26 / 0.5);
+}
+
+.ag-settings-checkbox {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-radius: 4px;
+  width: 14px;
+  height: 14px;
+  background-color: #252525;
+  transition: background-color 0.2s ease;
+  flex-shrink: 0;
+
+  &:has(.ag-settings-checkbox-input:checked) {
+    background-color: #fff;
+  }
+
+  &:has(.ag-settings-checkbox-input:focus-visible) {
+    outline: 2px solid var(--agentation-color-accent);
+    outline-offset: 2px;
+  }
+}
+
+.ag-settings-checkbox-input {
+  position: absolute;
+  z-index: 1;
+  inset: -1px;
+  border-radius: inherit;
+  opacity: 0;
+  cursor: pointer;
+  margin: 0;
+}
+
+.ag-settings-checkbox-check {
+  color: #1a1a1a;
+}
+
+.ag-settings-checkbox-check-path {
+  stroke-dasharray: 9.29px;
+  stroke-dashoffset: 9.29px;
+  color: #1a1a1a;
+  transition: stroke-dashoffset 0.1s ease;
+
+  .ag-settings-checkbox:has(.ag-settings-checkbox-input:checked) & {
+    transition-duration: 0.2s;
+    stroke-dashoffset: 0;
+  }
+}
+
+:host([data-agentation-theme="light"]) {
+  .ag-settings-checkbox {
+    border-color: rgb(26 26 26 / 0.2);
+    background-color: #fff;
+
+    &:has(.ag-settings-checkbox-input:checked) {
+      background-color: #1a1a1a;
+    }
+  }
+
+  .ag-settings-checkbox-check,
+  .ag-settings-checkbox-check-path {
+    color: #fafafa;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Switch
+// -----------------------------------------------------------------------------
+
+.ag-settings-switch {
+  display: flex;
+  align-items: center;
+  position: relative;
+  padding: 2px;
+  width: 24px;
+  height: 16px;
+  border-radius: 8px;
+  background-color: #484848;
+  flex-shrink: 0;
+  transition:
+    background-color 0.15s,
+    opacity 0.15s;
+
+  // Declared here rather than with the other light overrides at the foot of the
+  // section: it ties with the `:checked` rule below on specificity, so the state
+  // must come last to win — as it did in the original, where dark was the
+  // override and light the base.
+  :host([data-agentation-theme="light"]) & {
+    background-color: #cdcdcd;
+  }
+
+  &:has(.ag-settings-switch-input:checked) {
+    background-color: var(--agentation-color-blue);
+  }
+
+  &:has(.ag-settings-switch-input:disabled) {
+    opacity: 0.3;
+  }
+
+  &:has(.ag-settings-switch-input:focus-visible) {
+    outline: 2px solid var(--agentation-color-accent);
+    outline-offset: 2px;
+  }
+}
+
+.ag-settings-switch-input {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  cursor: pointer;
+  margin: 0;
+
+  &:disabled {
+    cursor: not-allowed;
+  }
+}
+
+.ag-settings-switch-thumb {
+  border-radius: 50%;
+  width: 12px;
+  height: 12px;
+  background-color: #fff;
+  transition: transform 0.15s;
+
+  .ag-settings-switch:has(.ag-settings-switch-input:checked) & {
+    transform: translateX(8px);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Nav link (main → automations)
+// -----------------------------------------------------------------------------
+
+.ag-settings-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  line-height: 20px;
+  font-size: 13px;
+  font-weight: 400;
+  color: rgb(255 255 255 / 0.5);
+  transition: color 0.15s ease;
+  cursor: pointer;
+
+  &:hover {
+    color: rgb(255 255 255 / 0.9);
+  }
+
+  svg {
+    color: rgb(255 255 255 / 0.4);
+    transition: color 0.15s ease;
+  }
+
+  &:hover svg {
+    color: #fff;
+  }
+}
+
+.ag-settings-nav-link-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-nav-link {
+  color: rgba(0, 0, 0, 0.5);
+
+  &:hover {
+    color: rgba(0, 0, 0, 0.8);
+  }
+
+  svg {
+    color: rgba(0, 0, 0, 0.25);
+  }
+
+  &:hover svg {
+    color: rgba(0, 0, 0, 0.8);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Automations page
+// -----------------------------------------------------------------------------
+
+.ag-settings-back-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  background: transparent;
+  font-family: inherit;
+  line-height: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.15px;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.12s cubic-bezier(0.32, 0.72, 0, 1);
+
+  svg {
+    opacity: 0.4;
+    flex-shrink: 0;
+    transition:
+      opacity 0.15s ease,
+      transform 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  &:hover svg {
+    opacity: 1;
+  }
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-back-button {
+  color: rgba(0, 0, 0, 0.85);
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+.ag-settings-automation-header {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: #fff;
+}
+
+.ag-settings-automation-description {
+  font-size: 0.6875rem;
+  font-weight: 300;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 2px;
+  line-height: 14px;
+}
+
+.ag-settings-mcp-description {
+  padding-bottom: 6px;
+}
+
+.ag-settings-learn-more {
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(255, 255, 255, 0.2);
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+
+  &:hover {
+    color: #fff;
+  }
+}
+
+:host([data-agentation-theme="light"]) {
+  .ag-settings-automation-header {
+    color: rgba(0, 0, 0, 0.85);
+  }
+
+  .ag-settings-automation-description {
+    color: rgba(0, 0, 0, 0.5);
+  }
+
+  .ag-settings-learn-more {
+    color: rgba(0, 0, 0, 0.6);
+    text-decoration-color: rgba(0, 0, 0, 0.2);
+
+    &:hover {
+      color: rgba(0, 0, 0, 0.85);
+    }
+  }
+}
+
+.ag-settings-auto-send {
+  display: flex;
+  align-items: center;
+}
+
+.ag-settings-auto-send-label {
+  padding-inline-end: 8px;
+  font-size: 11px;
+  font-weight: 400;
+  color: rgb(255 255 255 / 0.4);
+  transition:
+    color 0.15s,
+    opacity 0.15s;
+  cursor: pointer;
+
+  &.is-active {
+    color: #66b8ff;
+    color: color(display-p3 0.4 0.72 1);
+  }
+
+  &.is-disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-auto-send-label {
+  color: rgba(0 0 0 / 0.4);
+
+  &.is-active {
+    color: var(--agentation-color-blue);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// MCP status indicators
+// -----------------------------------------------------------------------------
+
+.ag-settings-mcp-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &.is-connecting {
+    background-color: var(--agentation-color-yellow);
+    animation: ag-settings-mcp-pulse 1.5s infinite;
+  }
+
+  &.is-connected {
+    background-color: var(--agentation-color-green);
+    animation: ag-settings-mcp-pulse 2.5s ease-in-out infinite;
+  }
+
+  &.is-disconnected {
+    background-color: var(--agentation-color-red);
+    animation: ag-settings-mcp-pulse-error 2s infinite;
+  }
+}
+
+.ag-settings-mcp-nav-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &.is-connected {
+    background-color: var(--agentation-color-green);
+    animation: ag-settings-mcp-pulse 2.5s ease-in-out infinite;
+  }
+
+  &.is-connecting {
+    background-color: var(--agentation-color-yellow);
+    animation: ag-settings-mcp-pulse 1.5s ease-in-out infinite;
+  }
+}
+
+.ag-settings-mcp-status-dot[hidden],
+.ag-settings-mcp-nav-indicator[hidden] {
+  display: none;
+}
+
+// -----------------------------------------------------------------------------
+// Webhook field
+// -----------------------------------------------------------------------------
+
+// The original was a bare `<textarea>`. A real labelled `<input type="url">`
+// needs a box it can sit at the top of, so the 60 px field is now the wrapper
+// and the input is transparent inside it: identical metrics, plus room for the
+// validity message without changing the field's height.
+.ag-settings-webhook-field {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  flex: 1;
+  min-height: 60px;
+  margin-top: 11px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+
+  &:focus-within {
+    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.ag-settings-webhook-input {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #fff;
+  outline: none;
+  user-select: text;
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+  }
+}
+
+.ag-settings-webhook-error {
+  margin-top: 4px;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 14px;
+  color: var(--agentation-color-red);
+}
+
+.ag-settings-webhook-error[hidden] {
+  display: none;
+}
+
+:host([data-agentation-theme="light"]) {
+  .ag-settings-webhook-field {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.03);
+
+    &:focus-within {
+      border-color: rgba(0, 0, 0, 0.25);
+      background: rgba(0, 0, 0, 0.05);
+    }
+  }
+
+  .ag-settings-webhook-input {
+    color: rgba(0, 0, 0, 0.85);
+
+    &::placeholder {
+      color: rgba(0, 0, 0, 0.3);
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Help tooltip
+// -----------------------------------------------------------------------------
+
+.ag-settings-help {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: help;
+}
+
+.ag-settings-help-icon {
+  transform: translateY(0.5px);
+  color: #fff;
+  opacity: 0.2;
+  transition: opacity 0.15s ease;
+  will-change: transform;
+
+  .ag-settings-help:hover &,
+  .ag-settings-help:focus-visible & {
+    opacity: 0.5;
+  }
+}
+
+:host([data-agentation-theme="light"]) .ag-settings-help-icon {
+  color: #000;
+}
+
+// Fixed, and a child of the root rather than the panel: the panel clips and
+// blurs its own subtree. `z-index` matches the original portal's 100020.
+.ag-settings-tooltip {
+  position: fixed;
+  transform: translateY(-50%);
+  padding: 6px 10px;
+  width: 180px;
+  background: #383838;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 14px;
+  border-radius: 10px;
+  text-align: left;
+  z-index: 100020;
+  pointer-events: none;
+  box-shadow: 0px 1px 8px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ag-settings-tooltip[hidden] {
+  display: none;
+}
+
+.ag-settings-tooltip.is-visible {
+  opacity: 1;
+}

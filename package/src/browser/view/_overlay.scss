@@ -1,0 +1,345 @@
+// =============================================================================
+// Overlay region
+// =============================================================================
+//
+// Hover highlight and tooltip, target outlines, drag-selection rectangle with
+// its live element highlights, and the blank wireframe backdrop with its notice.
+//
+// The region root is `display: contents`, so each child keeps the original
+// absolute stacking order relative to the other regions: 99994 backdrop,
+// 99995 notice, 99997 hover/drag layer (99999 while an editor is open). The
+// numbers are derived from `--agentation-z-index` so a consumer raising the
+// stack keeps the same relative order.
+// =============================================================================
+
+@keyframes ag-overlay-hover-highlight-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ag-overlay-hover-tooltip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes ag-overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ag-overlay-fade-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+.ag-overlay {
+  display: contents;
+
+  --ag-overlay-layer: calc(var(--agentation-z-index, 100000) - 3);
+}
+
+.ag-overlay.is-editing {
+  // The original bumped `.overlay` to 99999 while a popup was open so the
+  // pending target box sat above the markers layer.
+  --ag-overlay-layer: calc(var(--agentation-z-index, 100000) - 1);
+}
+
+.ag-overlay :is(*, *::before, *::after) {
+  box-sizing: border-box;
+}
+
+// `hidden` must beat this region's own layout declarations.
+.ag-overlay [hidden] {
+  display: none;
+}
+
+// Zero-box wrapper for a pooled collection.
+.ag-overlay-group {
+  display: contents;
+}
+
+// =============================================================================
+// Blank wireframe backdrop
+// =============================================================================
+
+.ag-overlay-blank-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--agentation-z-index, 100000) - 6);
+  // Theme-independent by design: the wireframe canvas is always white paper,
+  // so its dot grid and notice keep the original black ramp rather than the
+  // themed text tokens (which would be white-on-white in the dark theme).
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.ag-overlay-blank-canvas.is-visible {
+  opacity: var(--canvas-opacity, 1);
+  // Load-bearing, as in the original: the real page hides behind white paper,
+  // so the backdrop must swallow clicks that would otherwise annotate content
+  // the user cannot see. The layout overlay sits above it at 99995.
+  pointer-events: auto;
+}
+
+.ag-overlay-blank-canvas::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.08) 1px, transparent 1px);
+  background-position: 12px 12px;
+  background-size: 24px 24px;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.ag-overlay-blank-canvas.is-grid-active::after {
+  opacity: 1;
+  background-image: radial-gradient(circle, rgba(0, 0, 0, 0.22) 1px, transparent 1px);
+}
+
+// =============================================================================
+// Wireframe notice (bottom-left hint)
+// =============================================================================
+
+.ag-overlay-wireframe-notice {
+  position: fixed;
+  bottom: 16px;
+  left: 24px;
+  z-index: calc(var(--agentation-z-index, 100000) - 5);
+  max-width: 280px;
+  color: rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  font-family: var(--agentation-font);
+  font-size: 9.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  animation: ag-overlay-fade-in 0.3s ease;
+}
+
+.ag-overlay-wireframe-opacity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ag-overlay-wireframe-opacity-label {
+  color: rgba(0, 0, 0, 0.32);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.ag-overlay-wireframe-opacity-slider {
+  width: 56px;
+  height: 4px;
+  flex-shrink: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 0.15s ease;
+}
+
+.ag-overlay-wireframe-opacity-slider:hover {
+  background: rgba(0, 0, 0, 0.13);
+}
+
+// The wireframe accent is the layout mode's own orange (#f97316), not the
+// annotation accent token; the hover value is the original `darken(…, 8%)`.
+.ag-overlay-wireframe-opacity-slider::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 50%;
+  background: #f97316;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.ag-overlay-wireframe-opacity-slider::-webkit-slider-thumb:hover {
+  background: #e05f06;
+}
+
+.ag-overlay-wireframe-opacity-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: none;
+  border-radius: 50%;
+  background: #f97316;
+  cursor: pointer;
+}
+
+.ag-overlay-wireframe-opacity-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.ag-overlay-wireframe-notice-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 2px;
+}
+
+.ag-overlay-wireframe-notice-title {
+  color: rgba(0, 0, 0, 0.55);
+  font-weight: 600;
+}
+
+.ag-overlay-wireframe-notice-divider {
+  width: 1px;
+  height: 8px;
+  flex-shrink: 0;
+  margin: 0 8px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.ag-overlay-wireframe-start-over {
+  padding: 0;
+  border: none;
+  color: rgba(0, 0, 0, 0.35);
+  background: none;
+  cursor: pointer;
+  pointer-events: auto;
+  font-family: inherit;
+  font-size: 9.5px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.12s ease;
+}
+
+.ag-overlay-wireframe-start-over:hover {
+  color: rgba(0, 0, 0, 0.6);
+}
+
+// =============================================================================
+// Hover / outline / drag layer
+// =============================================================================
+
+.ag-overlay-layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--ag-overlay-layer);
+  pointer-events: none;
+}
+
+.ag-overlay-hover-highlight {
+  position: fixed;
+  border: 2px solid color-mix(in srgb, var(--agentation-color-accent) 50%, transparent);
+  border-radius: 4px;
+  background-color: color-mix(in srgb, var(--agentation-color-accent) 4%, transparent);
+  pointer-events: none;
+  will-change: opacity;
+  contain: layout style;
+  animation: ag-overlay-hover-highlight-in 0.12s ease-out forwards;
+}
+
+.ag-overlay-hover-tooltip {
+  position: fixed;
+  max-width: 280px;
+  padding: 0.35rem 0.6rem;
+  overflow: hidden;
+  border-radius: 0.375rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  animation: ag-overlay-hover-tooltip-in 0.1s ease-out forwards;
+}
+
+.ag-overlay-hover-component-path {
+  margin-bottom: 0.15rem;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.625rem;
+  text-overflow: ellipsis;
+}
+
+.ag-overlay-hover-element-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-overlay-outline {
+  position: fixed;
+  border-radius: 4px;
+  pointer-events: none;
+  will-change: opacity;
+  animation: ag-overlay-fade-in 0.15s ease-out forwards;
+}
+
+.ag-overlay-outline.is-exiting {
+  animation: ag-overlay-fade-out 0.15s ease-out forwards;
+}
+
+.ag-overlay-outline-multi {
+  border: 2px dashed color-mix(in srgb, var(--agentation-color-green) 60%, transparent);
+  background-color: color-mix(in srgb, var(--agentation-color-green) 5%, transparent);
+}
+
+.ag-overlay-outline-single {
+  border: 2px solid color-mix(in srgb, var(--agentation-color-accent) 60%, transparent);
+  background-color: color-mix(in srgb, var(--agentation-color-accent) 5%, transparent);
+}
+
+.ag-overlay-drag-selection {
+  position: fixed;
+  top: 0;
+  left: 0;
+  border: 2px solid color-mix(in srgb, var(--agentation-color-green) 60%, transparent);
+  border-radius: 4px;
+  background-color: color-mix(in srgb, var(--agentation-color-green) 8%, transparent);
+  pointer-events: none;
+  will-change: transform, width, height;
+  contain: layout style;
+}
+
+.ag-overlay-selected-element-highlight {
+  position: fixed;
+  top: 0;
+  left: 0;
+  border: 2px solid color-mix(in srgb, var(--agentation-color-green) 50%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--agentation-color-green) 6%, transparent);
+  pointer-events: none;
+  will-change: transform, width, height;
+  contain: layout style;
+}

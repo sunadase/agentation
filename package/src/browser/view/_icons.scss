@@ -1,0 +1,51 @@
+// Icon state transitions.
+//
+// Ported from `components/icon-transitions.module.scss`. The `!important` flags
+// are load-bearing: host rules such as `svg * { opacity: 1 !important }` would
+// otherwise reveal both layers of a two-state icon at once.
+// See: https://github.com/benjitaylor/agentation/issues/58
+
+.ag-icon-state {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+  transform-origin: center;
+}
+
+.ag-icon-state-fast {
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+  transform-origin: center;
+}
+
+.ag-icon-fade {
+  transition: opacity 0.2s ease;
+}
+
+.ag-icon-fade-fast {
+  transition: opacity 0.15s ease;
+}
+
+.ag-icon-visible {
+  opacity: 1 !important;
+}
+
+.ag-icon-visible-scaled {
+  opacity: 1 !important;
+  transform: scale(1);
+}
+
+.ag-icon-hidden {
+  opacity: 0 !important;
+}
+
+.ag-icon-hidden-scaled {
+  opacity: 0 !important;
+  transform: scale(0.8);
+}
+
+.ag-icon-sending {
+  opacity: 0.5 !important;
+  transform: scale(0.8);
+}

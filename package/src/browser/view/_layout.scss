@@ -1,0 +1,1775 @@
+// =============================================================================
+// Layout mode
+// =============================================================================
+//
+// Port of `components/design-mode/styles.module.scss` — the palette panel, the
+// placement overlay and the page-rearrangement overlay. Every dimension,
+// duration, easing curve and colour literal is copied verbatim so the frozen
+// parity screenshots still match.
+//
+// Two deliberate departures from the original file, both invisible:
+//
+//   * The blue/orange literals stay literal ($blue #3c82f7, $orange #f97316).
+//     They are layout-mode identity, not the annotation accent, so they must
+//     *not* follow `--agentation-color-accent`.
+//   * Light theme is a `.ag-layout.is-light` ancestor class rather than the
+//     module's `.light &` pattern, matching the popup region's convention.
+//
+// z-indices are derived from `--agentation-z-index` (default 100000) so that a
+// consumer raising the stack keeps the original relative order:
+//   -6 = 99994 hover highlight   -5 = 99995 overlays
+//   -4 = 99996 draw/select/connectors    +1 = 100001 guides, size, palette
+//   +2 = 100002 palette drag preview
+// The overlay region owns 99994 (backdrop) and 99995 (wireframe notice); this
+// region sits at the same 99995 band as the original `.overlay` did.
+//
+// `.blankCanvas` and `.wireframeNotice*` are intentionally absent: they belong
+// to the overlay region. `.settled`, `.movedBadge`, `.resizedBadge`,
+// `.originalOutline`, `.originalLabel` and the `.canvasPurpose*` block are
+// absent because the original never rendered them.
+// =============================================================================
+
+$ag-layout-blue: #3c82f7;
+$ag-layout-blue-dim: rgba(59, 130, 246, 0.15);
+$ag-layout-orange: #f97316;
+$ag-layout-orange-dim: rgba(249, 115, 22, 0.15);
+$ag-layout-red: #ef4444;
+$ag-layout-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+// -----------------------------------------------------------------------------
+// Root
+// -----------------------------------------------------------------------------
+
+// `display: contents` keeps every layer in the shadow root's stacking context,
+// so the wireframe backdrop below and the hover visuals above stay in order.
+.ag-layout {
+  display: contents;
+}
+
+.ag-layout :is(*, *::before, *::after) {
+  box-sizing: border-box;
+}
+
+// `hidden` has to beat this region's own layout declarations.
+.ag-layout [hidden] {
+  display: none;
+}
+
+.ag-layout button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+// Stroke-based glyphs must never be filled by an inherited rule.
+.ag-layout svg[fill="none"] {
+  fill: none;
+}
+
+// -----------------------------------------------------------------------------
+// Palette anchor
+// -----------------------------------------------------------------------------
+//
+// A zero-interaction stand-in for the toolbar's own box: same fixed placement,
+// same 337x44 dimensions (the bar is right-aligned inside that width via
+// `margin-left: auto`, which is why the panel offsets 5px from the right edge).
+// The panel then keeps the original `bottom: calc(100% + 0.5rem)` relationship
+// without either region measuring the other during the 400 ms width morph.
+
+.ag-layout-anchor {
+  position: fixed;
+  top: var(--agentation-toolbar-top, auto);
+  right: var(--agentation-toolbar-right, 1.25rem);
+  bottom: var(--agentation-toolbar-bottom, 1.25rem);
+  left: var(--agentation-toolbar-left, auto);
+  width: 337px;
+  height: 44px;
+  z-index: calc(var(--agentation-z-index, 100000) + 1);
+  pointer-events: none;
+}
+
+// -----------------------------------------------------------------------------
+// Palette panel
+// -----------------------------------------------------------------------------
+
+.ag-layout-palette {
+  position: absolute;
+  right: 5px;
+  bottom: calc(100% + 0.5rem);
+  width: 256px;
+  padding: 13px 0 16px;
+  overflow: hidden;
+  border: none;
+  border-radius: 1rem;
+  background: #1c1c1c;
+  box-shadow:
+    0 1px 8px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  font-family: $ag-layout-font;
+  cursor: default;
+  pointer-events: auto;
+
+  // Initial state, before the enter transition is armed.
+  opacity: 0;
+  filter: blur(5px);
+
+  &.is-enter {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0px);
+    transition:
+      opacity 0.2s ease,
+      transform 0.2s ease,
+      filter 0.2s ease;
+  }
+
+  &.is-exit {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(5px);
+    pointer-events: none;
+    transition:
+      opacity 0.1s ease,
+      transform 0.1s ease,
+      filter 0.1s ease;
+  }
+}
+
+// Theme transitions on the panel's children, matching the settings panel.
+.ag-layout-item,
+.ag-layout-item-label,
+.ag-layout-palette-section-title,
+.ag-layout-footer {
+  transition:
+    background 0.25s ease,
+    color 0.25s ease,
+    border-color 0.25s ease;
+}
+
+.ag-layout.is-light .ag-layout-palette {
+  background: #fff;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    0 4px 16px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+// --- Header -------------------------------------------------------------------
+
+.ag-layout-palette-header {
+  padding: 0 1rem 0.375rem;
+}
+
+.ag-layout-palette-title {
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: -0.0094em;
+}
+
+.ag-layout.is-light .ag-layout-palette-title {
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.ag-layout-palette-desc {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.6875rem;
+  font-weight: 300;
+  line-height: 14px;
+
+  a {
+    color: rgba(255, 255, 255, 0.8);
+    text-decoration: underline dotted;
+    text-decoration-color: rgba(255, 255, 255, 0.2);
+    text-underline-offset: 2px;
+    transition: color 0.15s ease;
+
+    &:hover {
+      color: #fff;
+    }
+  }
+}
+
+.ag-layout.is-light .ag-layout-palette-desc {
+  color: rgba(0, 0, 0, 0.45);
+
+  a {
+    color: rgba(0, 0, 0, 0.6);
+    text-decoration-color: rgba(0, 0, 0, 0.2);
+
+    &:hover {
+      color: rgba(0, 0, 0, 0.85);
+    }
+  }
+}
+
+// --- Wireframe toggle ---------------------------------------------------------
+
+.ag-layout-canvas-toggle {
+  display: flex;
+  width: calc(100% - 2rem);
+  margin: 0.25rem 1rem 0.25rem;
+  padding: 0.375rem 0.5rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  background: transparent;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+
+  &:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  &.is-active {
+    border-color: transparent;
+    border-style: solid;
+    background: $ag-layout-orange;
+    box-shadow: none;
+  }
+}
+
+.ag-layout.is-light .ag-layout-canvas-toggle {
+  border-color: rgba(0, 0, 0, 0.08);
+
+  &:hover {
+    border-color: rgba(0, 0, 0, 0.12);
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  &.is-active {
+    border-color: transparent;
+    border-style: solid;
+    background: $ag-layout-orange;
+    box-shadow: none;
+  }
+}
+
+.ag-layout-canvas-toggle-icon {
+  display: flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.ag-layout-canvas-toggle.is-active .ag-layout-canvas-toggle-icon {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.ag-layout.is-light .ag-layout-canvas-toggle-icon {
+  color: rgba(0, 0, 0, 0.25);
+}
+
+.ag-layout.is-light .ag-layout-canvas-toggle.is-active .ag-layout-canvas-toggle-icon {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.ag-layout-canvas-toggle-label {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: -0.0094em;
+}
+
+.ag-layout-canvas-toggle.is-active .ag-layout-canvas-toggle-label {
+  color: #fff;
+}
+
+.ag-layout.is-light .ag-layout-canvas-toggle-label {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.ag-layout.is-light .ag-layout-canvas-toggle.is-active .ag-layout-canvas-toggle-label {
+  color: #fff;
+}
+
+// --- Wireframe purpose field --------------------------------------------------
+
+// Height transition via `grid-template-rows`.
+.ag-layout-purpose-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 0.2s ease,
+    opacity 0.15s ease;
+
+  &.is-collapsed {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+// `overflow: hidden` here is what makes the grid animation work.
+.ag-layout-purpose-inner {
+  overflow: hidden;
+}
+
+.ag-layout-purpose-input {
+  display: block;
+  width: calc(100% - 2rem);
+  margin: 0.25rem 1rem 0.375rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.375rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  letter-spacing: -0.0094em;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s ease;
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+  }
+
+  &:focus {
+    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+.ag-layout.is-light .ag-layout-purpose-input {
+  border-color: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.03);
+  color: rgba(0, 0, 0, 0.7);
+
+  &::placeholder {
+    color: rgba(0, 0, 0, 0.3);
+  }
+
+  &:focus {
+    border-color: rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.05);
+  }
+}
+
+// --- Component list -----------------------------------------------------------
+
+.ag-layout-scroll {
+  max-height: 240px;
+  padding-top: 0.25rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  &.is-fade-top {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 32px);
+    mask-image: linear-gradient(to bottom, transparent 0, black 32px);
+  }
+
+  &.is-fade-bottom {
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 32px), transparent 100%);
+    mask-image: linear-gradient(to bottom, black calc(100% - 32px), transparent 100%);
+  }
+
+  &.is-fade-top.is-fade-bottom {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      black 32px,
+      black calc(100% - 32px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      black 32px,
+      black calc(100% - 32px),
+      transparent 100%
+    );
+  }
+
+  &::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+.ag-layout.is-light .ag-layout-scroll::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.ag-layout-palette-section {
+  padding: 0 1rem;
+
+  & + & {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+  }
+}
+
+.ag-layout.is-light .ag-layout-palette-section + .ag-layout-palette-section {
+  border-top-color: rgba(0, 0, 0, 0.07);
+}
+
+.ag-layout-palette-section-title {
+  padding: 0 0 3px 3px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: -0.0094em;
+}
+
+.ag-layout.is-light .ag-layout-palette-section-title {
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.ag-layout-item {
+  display: flex;
+  width: 100%;
+  min-height: 24px;
+  margin-bottom: 1px;
+  padding: 0.25rem 0.25rem;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  text-align: left;
+  user-select: none;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  &.is-active {
+    border-color: transparent;
+    background: $ag-layout-blue;
+  }
+}
+
+.ag-layout.is-wireframe .ag-layout-item.is-active {
+  background: $ag-layout-orange;
+}
+
+.ag-layout.is-light .ag-layout-item {
+  &:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  &.is-active {
+    border-color: transparent;
+    background: $ag-layout-blue;
+  }
+}
+
+.ag-layout.is-light.is-wireframe .ag-layout-item.is-active {
+  background: $ag-layout-orange;
+}
+
+.ag-layout-item-icon {
+  display: flex;
+  width: 20px;
+  height: 16px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.45);
+
+  svg {
+    display: block;
+    width: 20px;
+    height: 16px;
+  }
+}
+
+.ag-layout-item.is-active .ag-layout-item-icon {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.ag-layout.is-light .ag-layout-item-icon {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.02);
+  color: rgba(0, 0, 0, 0.4);
+}
+
+.ag-layout.is-light .ag-layout-item.is-active .ag-layout-item-icon {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.ag-layout-item-label {
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.0094em;
+}
+
+.ag-layout-item.is-active .ag-layout-item-label {
+  color: #fff;
+  font-weight: 600;
+}
+
+.ag-layout.is-light .ag-layout-item-label {
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.ag-layout.is-light .ag-layout-item.is-active .ag-layout-item-label {
+  color: #fff;
+  font-weight: 600;
+}
+
+// --- Footer -------------------------------------------------------------------
+
+.ag-layout-footer-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+
+  &.is-collapsed {
+    grid-template-rows: 0fr;
+  }
+}
+
+.ag-layout-footer-inner {
+  overflow: hidden;
+}
+
+.ag-layout-footer-content {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+.ag-layout-footer-wrap.is-collapsed .ag-layout-footer-content {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.ag-layout-footer {
+  display: flex;
+  min-height: 24px;
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem 0;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ag-layout.is-light .ag-layout-footer {
+  border-top-color: rgba(0, 0, 0, 0.07);
+}
+
+.ag-layout-footer-count {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: -0.0094em;
+}
+
+.ag-layout-footer-clear {
+  color: rgba(255, 255, 255, 0.5);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  letter-spacing: -0.0094em;
+  transition: color 0.15s ease;
+
+  &:hover {
+    color: rgba(255, 255, 255, 0.7);
+  }
+}
+
+.ag-layout.is-light .ag-layout-footer-count {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.ag-layout.is-light .ag-layout-footer-clear {
+  color: rgba(0, 0, 0, 0.5);
+
+  &:hover {
+    color: rgba(0, 0, 0, 0.6);
+  }
+}
+
+// --- Rolling count ------------------------------------------------------------
+
+.ag-layout-rolling-wrap {
+  display: inline-block;
+  position: relative;
+  height: 1.15em;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+// A hidden copy of the incoming label reserves the width the rolling digits
+// need, since both animating spans are absolutely positioned.
+.ag-layout-rolling-ghost {
+  visibility: hidden;
+}
+
+.ag-layout-rolling-num {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.ag-layout-exit-up {
+  animation: ag-layout-num-exit-up 0.25s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+.ag-layout-enter-up {
+  animation: ag-layout-num-enter-up 0.25s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+.ag-layout-exit-down {
+  animation: ag-layout-num-exit-down 0.25s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+.ag-layout-enter-down {
+  animation: ag-layout-num-enter-down 0.25s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+@keyframes ag-layout-num-exit-up {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-110%);
+  }
+}
+
+@keyframes ag-layout-num-enter-up {
+  from {
+    opacity: 0;
+    transform: translateY(110%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ag-layout-num-exit-down {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(110%);
+  }
+}
+
+@keyframes ag-layout-num-enter-down {
+  from {
+    opacity: 0;
+    transform: translateY(-110%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Placement overlay
+// -----------------------------------------------------------------------------
+
+.ag-layout-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--agentation-z-index, 100000) - 5);
+  cursor: default;
+  pointer-events: auto;
+  animation: ag-layout-overlay-fade-in 0.15s ease;
+
+  // Skeleton palette, consumed by `layout/skeletons.ts`.
+  --agd-stroke: rgba(59, 130, 246, 0.35);
+  --agd-fill: rgba(59, 130, 246, 0.06);
+  --agd-bar: rgba(59, 130, 246, 0.18);
+  --agd-bar-strong: rgba(59, 130, 246, 0.28);
+  --agd-text-3: rgba(255, 255, 255, 0.6);
+  --agd-surface: #141414;
+
+  &.is-placing {
+    cursor: crosshair;
+  }
+
+  // No armed component: clicks fall through to the page so the rearrange
+  // overlay can capture.
+  &.is-passthrough {
+    pointer-events: none;
+  }
+}
+
+.ag-layout.is-light .ag-layout-overlay {
+  --agd-surface: #fff;
+}
+
+.ag-layout.is-wireframe .ag-layout-overlay {
+  --agd-stroke: rgba(249, 115, 22, 0.35);
+  --agd-fill: rgba(249, 115, 22, 0.06);
+  --agd-bar: rgba(249, 115, 22, 0.18);
+  --agd-bar-strong: rgba(249, 115, 22, 0.28);
+}
+
+.ag-layout-overlay.is-exiting,
+.ag-layout-rearrange.is-exiting {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+// --- Placed component ---------------------------------------------------------
+
+.ag-layout-placement {
+  position: absolute;
+  border: 1.5px dashed rgba(59, 130, 246, 0.4);
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  cursor: grab;
+  user-select: none;
+  pointer-events: auto;
+  transition:
+    box-shadow 0.15s,
+    border-color 0.15s,
+    opacity 0.15s ease,
+    transform 0.15s ease;
+  animation: ag-layout-placement-enter 0.25s cubic-bezier(0.34, 1.2, 0.64, 1);
+
+  &:active {
+    cursor: grabbing;
+  }
+
+  &:hover {
+    border-color: rgba(59, 130, 246, 0.5);
+    background: rgba(59, 130, 246, 0.1);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.12);
+  }
+
+  &.is-selected {
+    border-style: solid;
+    border-color: $ag-layout-blue;
+    background: rgba(59, 130, 246, 0.1);
+    box-shadow:
+      0 0 0 2px $ag-layout-blue-dim,
+      0 2px 8px rgba(59, 130, 246, 0.15);
+
+    &:hover {
+      box-shadow:
+        0 0 0 2px $ag-layout-blue-dim,
+        0 2px 8px rgba(59, 130, 246, 0.15);
+    }
+  }
+
+  &.is-exiting {
+    opacity: 0;
+    transform: scale(0.97);
+    pointer-events: none;
+    animation: none;
+    transition:
+      opacity 0.2s ease,
+      transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+}
+
+.ag-layout.is-wireframe .ag-layout-placement {
+  border-color: rgba(249, 115, 22, 0.4);
+  background: rgba(249, 115, 22, 0.08);
+
+  &:hover {
+    border-color: rgba(249, 115, 22, 0.5);
+    background: rgba(249, 115, 22, 0.1);
+    box-shadow: 0 2px 8px rgba(249, 115, 22, 0.12);
+  }
+
+  &.is-selected {
+    border-color: $ag-layout-orange;
+    background: rgba(249, 115, 22, 0.1);
+    box-shadow:
+      0 0 0 2px $ag-layout-orange-dim,
+      0 2px 8px rgba(249, 115, 22, 0.15);
+
+    &:hover {
+      box-shadow:
+        0 0 0 2px $ag-layout-orange-dim,
+        0 2px 8px rgba(249, 115, 22, 0.15);
+    }
+  }
+}
+
+.ag-layout-placement-content {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ag-layout-placement-label {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  color: rgba(59, 130, 246, 0.7);
+  font-family: $ag-layout-font;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-shadow:
+    0 0 4px rgba(255, 255, 255, 0.8),
+    0 0 8px rgba(255, 255, 255, 0.5);
+  pointer-events: none;
+}
+
+.ag-layout-placement.is-selected .ag-layout-placement-label {
+  color: $ag-layout-blue;
+}
+
+.ag-layout.is-wireframe .ag-layout-placement-label {
+  color: rgba(249, 115, 22, 0.7);
+}
+
+.ag-layout.is-wireframe .ag-layout-placement.is-selected .ag-layout-placement-label {
+  color: $ag-layout-orange;
+}
+
+.ag-layout-placement-note,
+.ag-layout-section-note {
+  position: absolute;
+  right: 0;
+  bottom: -18px;
+  left: 0;
+  overflow: hidden;
+  opacity: 0;
+  font-family: $ag-layout-font;
+  font-size: 10px;
+  font-weight: 450;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-shadow:
+    0 0 4px rgba(255, 255, 255, 0.9),
+    0 0 8px rgba(255, 255, 255, 0.6);
+  transform: translateY(-2px);
+  pointer-events: none;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+
+  &.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ag-layout-placement-note {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.ag-layout-section-note {
+  color: rgba(59, 130, 246, 0.6);
+}
+
+// -----------------------------------------------------------------------------
+// Resize handles
+// -----------------------------------------------------------------------------
+
+.ag-layout-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  z-index: 12;
+  border: 1.5px solid $ag-layout-blue;
+  border-radius: 2px;
+  background: #fff;
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  transform: scale(0.3);
+  pointer-events: none;
+  will-change: opacity, transform;
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.ag-layout-placement:hover .ag-layout-handle,
+.ag-layout-placement:active .ag-layout-handle,
+.ag-layout-placement.is-selected .ag-layout-handle,
+.ag-layout-section-outline:hover .ag-layout-handle,
+.ag-layout-section-outline:active .ag-layout-handle,
+.ag-layout-section-outline.is-selected .ag-layout-handle {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.ag-layout.is-wireframe .ag-layout-handle {
+  border-color: $ag-layout-orange;
+}
+
+.ag-layout-handle-nw {
+  top: -4px;
+  left: -4px;
+  cursor: nw-resize;
+}
+
+.ag-layout-handle-ne {
+  top: -4px;
+  right: -4px;
+  cursor: ne-resize;
+}
+
+.ag-layout-handle-se {
+  right: -4px;
+  bottom: -4px;
+  cursor: se-resize;
+}
+
+.ag-layout-handle-sw {
+  bottom: -4px;
+  left: -4px;
+  cursor: sw-resize;
+}
+
+// The four midpoint dots exist for hit-testing parity with the original markup
+// but are never shown: the edge bars below replace them.
+.ag-layout-handle-n,
+.ag-layout-handle-e,
+.ag-layout-handle-s,
+.ag-layout-handle-w {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ag-layout-section-outline .ag-layout-handle-n {
+  top: -4px;
+  left: calc(50% - 4px);
+  cursor: n-resize;
+}
+
+.ag-layout-section-outline .ag-layout-handle-e {
+  top: calc(50% - 4px);
+  right: -4px;
+  cursor: e-resize;
+}
+
+.ag-layout-section-outline .ag-layout-handle-s {
+  bottom: -4px;
+  left: calc(50% - 4px);
+  cursor: s-resize;
+}
+
+.ag-layout-section-outline .ag-layout-handle-w {
+  top: calc(50% - 4px);
+  left: -4px;
+  cursor: w-resize;
+}
+
+// -----------------------------------------------------------------------------
+// Edge resize bars
+// -----------------------------------------------------------------------------
+
+.ag-layout-edge {
+  display: flex;
+  position: absolute;
+  z-index: 11;
+  align-items: center;
+  justify-content: center;
+  color: $ag-layout-blue;
+
+  // Pill indicator.
+  &::after {
+    position: absolute;
+    border-radius: 4px;
+    background: currentcolor;
+    content: "";
+    opacity: 0;
+    transform: scale(0.8);
+    transition:
+      opacity 0.1s ease,
+      transform 0.1s ease;
+  }
+
+  &:hover::after {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+
+  svg {
+    position: relative;
+    z-index: 1;
+    opacity: 0;
+    filter: drop-shadow(0 0 2px var(--agd-surface));
+    transition: opacity 0.1s ease;
+  }
+
+  &:hover svg {
+    opacity: 1;
+  }
+}
+
+.ag-layout.is-wireframe .ag-layout-edge {
+  color: $ag-layout-orange;
+}
+
+.ag-layout-edge-n,
+.ag-layout-edge-s {
+  right: 12px;
+  left: 12px;
+  height: 12px;
+  cursor: n-resize;
+
+  &::after {
+    width: 24px;
+    height: 4px;
+  }
+}
+
+.ag-layout-edge-n {
+  top: -6px;
+}
+
+.ag-layout-edge-s {
+  bottom: -6px;
+  cursor: s-resize;
+}
+
+.ag-layout-edge-e,
+.ag-layout-edge-w {
+  top: 12px;
+  bottom: 12px;
+  width: 12px;
+  cursor: e-resize;
+
+  &::after {
+    width: 4px;
+    height: 24px;
+  }
+}
+
+.ag-layout-edge-e {
+  right: -6px;
+}
+
+.ag-layout-edge-w {
+  left: -6px;
+  cursor: w-resize;
+}
+
+// -----------------------------------------------------------------------------
+// Delete button
+// -----------------------------------------------------------------------------
+
+.ag-layout-delete {
+  display: flex;
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  z-index: 15;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.35);
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0;
+  transform: scale(0.8);
+  pointer-events: none;
+  will-change: opacity, transform;
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+
+  &:hover {
+    border-color: $ag-layout-red;
+    background: $ag-layout-red;
+    box-shadow: 0 1px 4px rgba(239, 68, 68, 0.3);
+    color: #fff;
+    transform: scale(1.1);
+  }
+}
+
+.ag-layout-placement:hover .ag-layout-delete,
+.ag-layout-placement.is-selected .ag-layout-delete,
+.ag-layout-section-outline:hover .ag-layout-delete,
+.ag-layout-section-outline.is-selected .ag-layout-delete {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+// Dark theme is the default, so the dark treatment is the un-suffixed rule.
+.ag-layout:not(.is-light) .ag-layout-delete {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(40, 40, 40, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.5);
+
+  &:hover {
+    border-color: $ag-layout-red;
+    background: $ag-layout-red;
+    color: #fff;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Transient overlay visuals
+// -----------------------------------------------------------------------------
+
+.ag-layout-draw-box {
+  position: fixed;
+  z-index: calc(var(--agentation-z-index, 100000) - 4);
+  border: 2px solid $ag-layout-blue;
+  border-radius: 6px;
+  background: $ag-layout-blue-dim;
+  pointer-events: none;
+}
+
+.ag-layout-select-box {
+  position: fixed;
+  z-index: calc(var(--agentation-z-index, 100000) - 4);
+  border: 1px dashed $ag-layout-blue;
+  border-radius: 2px;
+  background: rgba(59, 130, 246, 0.08);
+  pointer-events: none;
+}
+
+.ag-layout-size-indicator {
+  position: fixed;
+  z-index: calc(var(--agentation-z-index, 100000) + 1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: $ag-layout-blue;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-family: $ag-layout-font;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ag-layout-guides {
+  display: contents;
+}
+
+.ag-layout-guide {
+  position: fixed;
+  z-index: calc(var(--agentation-z-index, 100000) + 1);
+  background: #f0f;
+  opacity: 0.5;
+  pointer-events: none;
+
+  &.is-x {
+    width: 1px;
+    height: 100vh;
+  }
+
+  &.is-y {
+    width: 100vw;
+    height: 1px;
+  }
+}
+
+.ag-layout-drag-preview {
+  display: flex;
+  position: fixed;
+  z-index: calc(var(--agentation-z-index, 100000) + 2);
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed $ag-layout-blue;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.1);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.15);
+  color: $ag-layout-blue;
+  font-family: $ag-layout-font;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+  transition:
+    width 0.08s ease,
+    height 0.08s ease,
+    opacity 0.08s ease;
+
+  &.is-wireframe {
+    border-color: $ag-layout-orange;
+    background: rgba(249, 115, 22, 0.1);
+    box-shadow: 0 4px 16px rgba(249, 115, 22, 0.15);
+    color: $ag-layout-orange;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Rearrange overlay
+// -----------------------------------------------------------------------------
+
+.ag-layout-rearrange {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--agentation-z-index, 100000) - 5);
+  cursor: default;
+  user-select: none;
+  pointer-events: none;
+  animation: ag-layout-overlay-fade-in 0.15s ease;
+}
+
+.ag-layout-hover-highlight {
+  position: fixed;
+  z-index: calc(var(--agentation-z-index, 100000) - 6);
+  border: 2px dashed rgba(59, 130, 246, 0.5);
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.06);
+  pointer-events: none;
+  animation: ag-layout-highlight-fade-in 0.12s ease;
+}
+
+// --- Section outline ----------------------------------------------------------
+
+.ag-layout-section-outline {
+  position: fixed;
+  border: 2px solid rgba(59, 130, 246, 0.5);
+  border-radius: 4px;
+  background-color: rgba(59, 130, 246, 0.08);
+  cursor: grab;
+  user-select: none;
+  pointer-events: auto;
+  transition:
+    box-shadow 0.15s,
+    border-color 0.3s,
+    background-color 0.3s,
+    border-style 0s;
+  animation: ag-layout-section-enter 0.2s ease;
+
+  &:active {
+    cursor: grabbing;
+  }
+
+  &:hover {
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.1),
+      0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  &.is-selected {
+    border-style: solid;
+    box-shadow:
+      0 0 0 2px $ag-layout-blue-dim,
+      0 2px 8px rgba(59, 130, 246, 0.15);
+
+    &:hover {
+      box-shadow:
+        0 0 0 2px $ag-layout-blue-dim,
+        0 2px 8px rgba(59, 130, 246, 0.15);
+    }
+  }
+
+  // Moved or resized: the suggested position renders as a translucent ghost.
+  &.is-ghost {
+    border: 1.5px dashed rgba(59, 130, 246, 0.4);
+    background: rgba(59, 130, 246, 0.04);
+    opacity: 0.5;
+    transition:
+      box-shadow 0.15s,
+      border-color 0.3s,
+      opacity 0.25s;
+    animation: ag-layout-ghost-enter 0.25s ease;
+
+    &:hover {
+      opacity: 0.7;
+      box-shadow:
+        0 0 0 1px rgba(59, 130, 246, 0.1),
+        0 4px 12px rgba(0, 0, 0, 0.08);
+    }
+
+    &.is-selected {
+      border-width: 2px;
+      border-style: solid;
+      border-color: $ag-layout-blue;
+      background: rgba(59, 130, 246, 0.08);
+      opacity: 1;
+      box-shadow:
+        0 0 0 2px $ag-layout-blue-dim,
+        0 2px 8px rgba(59, 130, 246, 0.15);
+    }
+  }
+
+  // Restored already-moved: hold the outline until the page element settles.
+  &.is-pending {
+    opacity: 0;
+    animation: none;
+    transition: none;
+  }
+
+  &.is-exiting {
+    opacity: 0;
+    transform: scale(0.97);
+    pointer-events: none;
+    animation: none;
+    transition:
+      opacity 0.2s ease,
+      transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+}
+
+.ag-layout-section-label {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  max-width: calc(100% - 8px);
+  padding: 2px 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background-color: #3b82f6;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-family: $ag-layout-font;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.ag-layout-section-dimensions {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: $ag-layout-font;
+  font-size: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ag-layout.is-light .ag-layout-section-dimensions {
+  background: rgba(255, 255, 255, 0.7);
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.ag-layout-ghost-badge {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: -1px;
+  padding: 1px 5px;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.08);
+  color: rgba(59, 130, 246, 0.9);
+  font-family: $ag-layout-font;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: ag-layout-badge-slide-in 0.2s ease both;
+}
+
+.ag-layout-ghost-badge-extra {
+  display: inline;
+  animation: ag-layout-badge-extra-in 0.2s ease both;
+}
+
+// --- Connectors ---------------------------------------------------------------
+
+.ag-layout-connectors {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: calc(var(--agentation-z-index, 100000) - 4);
+  pointer-events: none;
+}
+
+.ag-layout-connector-line {
+  transition: opacity 0.2s ease;
+  animation: ag-layout-connector-draw 0.3s ease both;
+}
+
+.ag-layout-connector-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ag-layout-connector-dot-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) 0.15s both;
+}
+
+.ag-layout-connectors.is-exiting,
+.ag-layout-connector-exiting {
+  animation: ag-layout-connector-out 0.2s ease forwards;
+
+  .ag-layout-connector-dot {
+    animation: ag-layout-connector-dot-out 0.2s ease forwards;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Text / note editor
+// -----------------------------------------------------------------------------
+//
+// Same shell as the annotation popup (the original reused `AnnotationPopupCSS`
+// here), reproduced in this namespace so the layout region owns no cross-region
+// class dependency.
+
+@keyframes ag-layout-editor-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.95) translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+}
+
+@keyframes ag-layout-editor-exit {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.95) translateY(4px);
+  }
+}
+
+.ag-layout-editor {
+  position: fixed;
+  width: 280px;
+  padding: 0.75rem 1rem 14px;
+  z-index: calc(var(--agentation-z-index, 100000) + 1);
+  border-radius: 16px;
+  background: #1a1a1a;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  font-family: var(--agentation-font);
+  opacity: 0;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  will-change: transform, opacity;
+
+  --ag-layout-editor-accent: #{$ag-layout-blue};
+
+  &.is-enter {
+    animation: ag-layout-editor-enter 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  &.is-exit {
+    animation: ag-layout-editor-exit 0.15s ease-in forwards;
+  }
+}
+
+.ag-layout.is-wireframe .ag-layout-editor {
+  --ag-layout-editor-accent: #{$ag-layout-orange};
+}
+
+.ag-layout-editor-header {
+  display: flex;
+  margin-bottom: 0.5625rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ag-layout-editor-element {
+  flex: 1;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.75rem;
+  font-weight: 400;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ag-layout-editor-textarea {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s ease;
+
+  &:focus {
+    border-color: var(--ag-layout-editor-accent);
+  }
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.35);
+  }
+}
+
+.ag-layout-editor-actions {
+  display: flex;
+  margin-top: 0.5rem;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.ag-layout-editor-cancel,
+.ag-layout-editor-submit {
+  padding: 0.4rem 0.875rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.ag-layout-editor-cancel {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+  }
+}
+
+.ag-layout-editor-submit {
+  background: var(--ag-layout-editor-accent);
+  color: #fff;
+
+  &:hover {
+    filter: brightness(0.9);
+  }
+}
+
+.ag-layout-editor-delete-wrapper {
+  margin-right: auto;
+}
+
+.ag-layout-editor-delete {
+  display: flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--agentation-color-red) 25%, transparent);
+    color: var(--agentation-color-red);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+}
+
+.ag-layout.is-light .ag-layout-editor {
+  background: #fff;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  .ag-layout-editor-element {
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .ag-layout-editor-textarea {
+    border-color: rgba(0, 0, 0, 0.12);
+    background: rgba(0, 0, 0, 0.03);
+    color: #1a1a1a;
+
+    &::placeholder {
+      color: rgba(0, 0, 0, 0.4);
+    }
+  }
+
+  .ag-layout-editor-cancel {
+    color: rgba(0, 0, 0, 0.5);
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.06);
+      color: rgba(0, 0, 0, 0.75);
+    }
+  }
+
+  .ag-layout-editor-delete {
+    color: rgba(0, 0, 0, 0.4);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Animations
+// -----------------------------------------------------------------------------
+
+@keyframes ag-layout-placement-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ag-layout-section-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ag-layout-ghost-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+
+  to {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+}
+
+@keyframes ag-layout-highlight-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ag-layout-overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ag-layout-badge-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ag-layout-badge-extra-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ag-layout-connector-draw {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ag-layout-connector-dot-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ag-layout-connector-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes ag-layout-connector-dot-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0);
+  }
+}

@@ -1,0 +1,230 @@
+// =============================================================================
+// Annotation markers
+// =============================================================================
+//
+// Ported from `components/page-toolbar-css/annotation-marker/styles.module.scss`
+// plus the two `.markersLayer` / `.fixedMarkersLayer` rules of the original
+// toolbar sheet. Geometry, durations and easing curves are copied verbatim;
+// theme colours come from the `--agentation-*` tokens instead of the original
+// hard-coded pair, since the shadow root no longer ships a light-mode fork of
+// every rule.
+//
+// Every marker rule is nested under the two layers on purpose: a marker is a
+// real `<button>`, and the shared `.ag-layer button` reset (`background: none`,
+// `color: inherit`, `font: inherit`) would otherwise out-specify the flat
+// `.ag-marker` class.
+// =============================================================================
+
+@keyframes ag-marker-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes ag-marker-out {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+}
+
+@keyframes ag-marker-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(2px) scale(0.891);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(0.909);
+  }
+}
+
+@keyframes ag-marker-renumber-roll {
+  0% {
+    opacity: 0;
+    transform: translateX(-40%);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.ag-marker-region {
+  display: contents;
+}
+
+.ag-marker-region[hidden] {
+  display: none;
+}
+
+// The original document-space layer scrolled with the page (`position:
+// absolute` at the document origin). A shadow layer is viewport-fixed, so the
+// scroll offset is folded into each marker's `top` by the region instead.
+.ag-marker-layer,
+.ag-marker-layer-fixed {
+  // Markers sit one step above the overlay, preserving the original
+  // 99998-over-99997 ordering relative to `--agentation-z-index`.
+  z-index: calc(var(--agentation-z-index, 100000) - 2);
+
+  > * {
+    pointer-events: auto;
+  }
+
+  .ag-marker {
+    position: absolute;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    background: var(--agentation-color-blue);
+    border-radius: 50%;
+    box-shadow:
+      0 2px 6px rgba(0, 0, 0, 0.2),
+      inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+    color: #fff;
+    font-family: var(--agentation-font);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+    cursor: pointer;
+    user-select: none;
+    contain: layout style;
+    will-change: transform, opacity;
+  }
+
+  .ag-marker:hover {
+    z-index: 2;
+  }
+
+  .ag-marker:focus-visible {
+    outline: 2px solid var(--agentation-text);
+    outline-offset: 2px;
+  }
+
+  // Only transition while no keyframe animation owns transform/opacity.
+  .ag-marker:not(.ag-marker-enter):not(.ag-marker-exit):not(.ag-marker-clearing) {
+    transition:
+      background-color 0.15s ease,
+      transform 0.1s ease;
+  }
+
+  .ag-marker:not(.ag-marker-enter):not(.ag-marker-exit):not(.ag-marker-clearing):hover {
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+
+  .ag-marker.ag-marker-enter {
+    animation: ag-marker-in 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .ag-marker.ag-marker-exit {
+    animation: ag-marker-out 0.2s ease-out both;
+    pointer-events: none;
+  }
+
+  .ag-marker.ag-marker-clearing {
+    animation: ag-marker-out 0.15s ease-out both;
+    pointer-events: none;
+  }
+
+  .ag-marker.ag-marker-multi {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background-color: var(--agentation-color-green);
+    font-size: 0.75rem;
+  }
+
+  // Delete affordance: the hovered marker turns red behind the close glyph.
+  .ag-marker.ag-marker-hovered {
+    background-color: var(--agentation-color-red);
+  }
+
+  .ag-marker-label {
+    display: inline;
+  }
+
+  .ag-marker-label.ag-marker-renumber {
+    display: block;
+    animation: ag-marker-renumber-roll 0.2s ease-out;
+  }
+
+  .ag-marker-label[hidden],
+  .ag-marker-glyph[hidden] {
+    display: none;
+  }
+
+  .ag-marker-tooltip {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 50%;
+    z-index: 100002;
+    display: block;
+    min-width: 120px;
+    max-width: 200px;
+    padding: 8px 0.75rem;
+    border-radius: 0.75rem;
+    background: var(--agentation-surface-solid);
+    box-shadow:
+      0 4px 20px var(--ag-marker-tooltip-shadow, rgba(0, 0, 0, 0.3)),
+      0 0 0 1px var(--ag-marker-tooltip-ring, rgba(255, 255, 255, 0.08));
+    color: var(--agentation-text);
+    font-family: var(--agentation-font);
+    font-weight: 400;
+    transform: translateX(-50%) scale(0.909);
+    animation: ag-marker-tooltip-in 0.1s ease-out forwards;
+    pointer-events: none;
+    cursor: default;
+  }
+
+  .ag-marker-tooltip[hidden] {
+    display: none;
+  }
+
+  .ag-marker-quote {
+    display: block;
+    overflow: hidden;
+    margin-bottom: 0.3125rem;
+    color: var(--agentation-text-muted);
+    font-size: 12px;
+    font-style: italic;
+    line-height: 1.4;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .ag-marker-note {
+    display: block;
+    overflow: hidden;
+    padding-bottom: 2px;
+    color: var(--agentation-text);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.4;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}
+
+// The tooltip shadow has no token equivalent (the shared `--agentation-shadow`
+// uses a different offset/blur), so its two colours are themed locally.
+:host([data-agentation-theme="light"]) .ag-marker-tooltip {
+  --ag-marker-tooltip-shadow: rgba(0, 0, 0, 0.12);
+  --ag-marker-tooltip-ring: rgba(0, 0, 0, 0.06);
+}

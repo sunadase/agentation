@@ -175,7 +175,12 @@ export function detectReactApp(): {
 
   // Fallback: Check for React root markers on DOM
   const hasReactRoot = document.querySelector("[data-reactroot]") !== null;
-  const hasReactContainer = document.getElementById("root")?._reactRootContainer !== undefined;
+  // `_reactRootContainer` is a legacy ReactDOM.render internal, absent from the
+  // DOM lib, so the element is widened to read it.
+  const legacyRoot = document.getElementById("root") as
+    | (HTMLElement & { _reactRootContainer?: unknown })
+    | null;
+  const hasReactContainer = legacyRoot?._reactRootContainer !== undefined;
 
   // Check for fiber keys on body's children
   const bodyChildren = document.body.children;

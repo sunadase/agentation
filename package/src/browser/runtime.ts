@@ -1,107 +1,121 @@
+// =============================================================================
+// Native Agentation Runtime
+// =============================================================================
+//
+// The framework-neutral product runtime: a custom element that owns all state
+// and drives the retained Shadow-DOM view in `browser/view.ts`.
+//
+// Responsibility split, deliberately narrow so no module needs to know another's
+// internals:
+//
+//   environment.ts  every realm capability (DOM, storage, network, timers)
+//   storage.ts      persistence, migration, retention
+//   sync.ts         endpoint/session resolution, health poll, SSE, upload
+//   targeting.ts    pointer/selection/area -> annotation payload
+//   view.ts         retained DOM; reports `ViewIntent`, never reads state
+//   layout/*        geometry, skeletons and layout-mode output
+//
+// This file is the only place that sequences them, and the only place that
+// mutates page elements (layout mode's captured sections).
+// =============================================================================
+
 import type { Annotation, OutputDetailLevel } from "../types";
+import { closestCrossingShadow } from "../utils/element-identification";
 import {
-  clearAnnotations as clearStoredAnnotations,
-  clearDesignPlacements,
-  clearRearrangeState,
-  clearWireframeState,
-  loadAnnotations,
-  loadDesignPlacements,
-  loadRearrangeState,
-  loadSessionId,
-  loadWireframeState,
-  saveAnnotations,
-  saveDesignPlacements,
-  saveRearrangeState,
-  saveSessionId,
-  saveWireframeState,
-} from "../utils/storage";
-import {
-  createSession,
-  deleteAnnotation as deleteAnnotationFromServer,
-  getSession,
-  requestAction,
-  syncAnnotation,
-  updateAnnotation as updateAnnotationOnServer,
-} from "../utils/sync";
-import { freeze, unfreeze } from "../utils/freeze-animations";
+  createAnimationFreezeController,
+  type AnimationFreezeController,
+} from "../utils/freeze-animations";
 import { generateOutput } from "../utils/generate-output";
+import { createRuntimeEnvironment, type RuntimeEnvironment } from "./environment";
+import { generateDesignOutput, generateRearrangeOutput } from "./layout/output";
 import {
-  getAccessibilityInfo,
-  getDetailedComputedStyles,
-  getElementClasses,
-  getFullElementPath,
-  getNearbyElements,
-  getNearbyText,
-  identifyElement,
-} from "../utils/element-identification";
-import { generateDesignOutput, generateRearrangeOutput } from "../components/design-mode/output";
-import {
-  COMPONENT_REGISTRY,
   DEFAULT_SIZES,
   type ComponentType,
   type DesignPlacement,
   type DetectedSection,
   type RearrangeState,
-} from "../components/design-mode/types";
-import { AGENTATION_STYLES } from "./styles";
+} from "./layout/types";
+import { createRuntimeStorage, type RuntimeStorage, type StorageFailure } from "./storage";
+import { createRuntimeSync, type ConnectionStatus, type RuntimeSync } from "./sync";
+import {
+  collectArea,
+  collectGroup,
+  collectTarget,
+  deepElementFromPoint,
+  type TargetContext,
+} from "./targeting";
 import type {
   AgentationConfig,
   AgentationController,
   AgentationElement,
   AgentationEvent,
   AgentationEventDetail,
-  ElementMetadataAdapter,
 } from "./types";
+import { createNativeAgentationView, type NativeAgentationView } from "./view";
+import {
+  ACCENT_OPTIONS,
+  type Box,
+  type CollectedTarget,
+  type EditorState,
+  type HoverState,
+  type LayoutViewState,
+  type Outline,
+  type RuntimeViewModel,
+  type SendState,
+  type SettingsPage,
+  type ToolbarSettings,
+  type ViewIntent,
+} from "./view/model";
 
 const TAG_NAME = "agentation-overlay";
+
+/** One runtime per document; a second mount is a consumer bug, not a feature. */
 const instances = new WeakMap<Document, NativeAgentation>();
 
-const COLOR_VALUES: Record<string, string> = {
-  blue: "#60a5fa",
-  purple: "#c084fc",
-  green: "#4ade80",
-  orange: "#fb923c",
-  red: "#f87171",
-};
+/** Pointer travel that turns a click into a drag selection, from the oracle. */
+const DRAG_THRESHOLD = 8;
 
-type ToolbarSettings = {
-  outputDetail: OutputDetailLevel;
-  autoClearAfterCopy: boolean;
-  annotationColorId: string;
-  blockInteractions: boolean;
-  metadataEnabled: boolean;
-  markerClickBehavior: "edit" | "delete";
-  webhookUrl: string;
-  webhooksEnabled: boolean;
-};
+/** Pointer travel before a toolbar pointerdown becomes a drag. */
+const TOOLBAR_DRAG_THRESHOLD = 10;
 
-const DEFAULT_SETTINGS: ToolbarSettings = {
-  outputDetail: "standard",
-  autoClearAfterCopy: false,
-  annotationColorId: "blue",
-  blockInteractions: true,
-  metadataEnabled: true,
-  markerClickBehavior: "edit",
-  webhookUrl: "",
-  webhooksEnabled: true,
-};
+/** Gap kept between a dragged toolbar and the viewport edge. */
+const TOOLBAR_VIEWPORT_PADDING = 20;
 
-type CollectedTarget = Omit<Annotation, "id" | "comment" | "timestamp">;
+/**
+ * Controls whose own behaviour competes with annotating. `blockInteractions`
+ * decides which side wins; everything else is always annotatable.
+ */
+const INTERACTIVE_SELECTOR =
+  'button, a, input, select, textarea, [role="button"], [onclick]';
 
-type PendingAnnotation = {
-  mode: "add" | "edit";
-  clientX: number;
-  clientY: number;
-  draft: string;
-  target?: CollectedTarget;
-  annotation?: Annotation;
-};
+/**
+ * Elements whose text a user plausibly wants to select. Starting an area drag
+ * here would fight the browser's own selection, and the selection is what a
+ * later annotation captures.
+ */
+const TEXT_SELECTION_SELECTOR =
+  "p, h1, h2, h3, h4, h5, h6, span, li, td, th, dt, dd, blockquote, figcaption," +
+  " label, code, pre, em, strong, small, [contenteditable]";
 
-type DrawStroke = {
-  id: string;
-  points: Array<{ x: number; y: number }>;
-  color: string;
-};
+/** Click suppression window after a drag gesture ends. */
+const CLICK_SUPPRESSION_MS = 250;
+
+const TOAST_MS = 2400;
+const COPIED_MS = 2000;
+const SENT_MS = 2000;
+const MARKER_EXIT_MS = 250;
+const RENUMBER_MS = 200;
+const ENTRANCE_MS = 750;
+const HIDE_MS = 300;
+const ROUTE_POLL_MS = 400;
+const SCROLL_IDLE_MS = 120;
+
+/** Grid density used to find elements inside a drag rectangle. */
+const AREA_PROBE_MAX = 8;
+
+/** Toolbar footprint used to clamp a dragged position into the viewport. */
+const TOOLBAR_WIDTH = 337;
+const TOOLBAR_HEIGHT = 44;
 
 type MoveBackup = {
   element: HTMLElement;
@@ -112,113 +126,6 @@ type MoveBackup = {
   zIndex: string;
 };
 
-type OverlayDrag =
-  | {
-      kind: "placement";
-      id: string;
-      resize: boolean;
-      startX: number;
-      startY: number;
-      original: { x: number; y: number; width: number; height: number };
-    }
-  | {
-      kind: "rearrange";
-      id: string;
-      resize: boolean;
-      startX: number;
-      startY: number;
-      original: { x: number; y: number; width: number; height: number };
-    };
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function createId(prefix = "ann"): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}_${crypto.randomUUID()}`;
-  }
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
-
-function sourceString(annotation: Annotation): string | undefined {
-  const source = annotation.framework?.source;
-  if (!source) return annotation.sourceFile;
-  return [source.file, source.line, source.column]
-    .filter((part) => part !== undefined)
-    .join(":");
-}
-
-function isFixed(element: HTMLElement): boolean {
-  let current: HTMLElement | null = element;
-  while (current) {
-    const position = getComputedStyle(current).position;
-    if (position === "fixed" || position === "sticky") return true;
-    current = current.parentElement;
-  }
-  return false;
-}
-
-function intersects(a: DOMRect, b: DOMRect): boolean {
-  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
-function uniqueSelector(element: HTMLElement): string {
-  if (element.id) return `#${CSS.escape(element.id)}`;
-  const parts: string[] = [];
-  let current: HTMLElement | null = element;
-  while (current && current !== document.body) {
-    let part = current.localName;
-    const stableClass = [...current.classList].find(
-      (name) => name.length > 2 && !/[A-Z0-9_-]{6,}$/.test(name),
-    );
-    if (stableClass) part += `.${CSS.escape(stableClass)}`;
-    const parent: HTMLElement | null = current.parentElement;
-    if (parent) {
-      const siblings = [...parent.children].filter((child) => child.localName === current!.localName);
-      if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
-    }
-    parts.unshift(part);
-    const selector = parts.join(" > ");
-    try {
-      if (document.querySelectorAll(selector).length === 1) return selector;
-    } catch {
-      // Keep walking; the final tag-only selector remains useful for output.
-    }
-    current = parent;
-  }
-  return parts.join(" > ");
-}
-
-function loadSettings(): ToolbarSettings {
-  try {
-    const parsed = JSON.parse(localStorage.getItem("feedback-toolbar-settings") ?? "null") ?? {};
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      metadataEnabled: parsed.metadataEnabled ?? parsed.reactEnabled ?? true,
-      annotationColorId: COLOR_VALUES[parsed.annotationColorId]
-        ? parsed.annotationColorId
-        : DEFAULT_SETTINGS.annotationColorId,
-    };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
-}
-
-function saveSettings(settings: ToolbarSettings): void {
-  try {
-    localStorage.setItem("feedback-toolbar-settings", JSON.stringify(settings));
-  } catch {
-    // Settings persistence is optional.
-  }
-}
-
 function validHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -228,122 +135,168 @@ function validHttpUrl(value: string): boolean {
   }
 }
 
+function emptyRearrange(now: number): RearrangeState {
+  return { sections: [], originalOrder: [], detectedAt: now };
+}
+
 class NativeAgentation {
-  readonly shadow: ShadowRoot;
-
-  private config: AgentationConfig;
-  private readonly document: Document;
-  private readonly window: Window & typeof globalThis;
-  private readonly HTMLElementCtor: typeof HTMLElement;
   private readonly host: AgentationElement;
+  private readonly environment: RuntimeEnvironment;
+  private readonly storage: RuntimeStorage;
+  private readonly freeze: AnimationFreezeController;
+  private readonly view: NativeAgentationView;
+  private readonly sync: RuntimeSync;
   private readonly abort: AbortController;
-  private readonly style: HTMLStyleElement;
-  private readonly blankLayer: HTMLDivElement;
-  private readonly canvas: HTMLCanvasElement;
-  private readonly overlayLayer: HTMLDivElement;
-  private readonly markerLayer: HTMLDivElement;
-  private readonly hoverLayer: HTMLDivElement;
-  private readonly selectionLayer: HTMLDivElement;
-  private readonly panel: HTMLDivElement;
-  private readonly popup: HTMLDivElement;
-  private readonly toolbar: HTMLDivElement;
-  private readonly toast: HTMLDivElement;
 
-  private annotations: Annotation[] = [];
-  private pending: PendingAnnotation | null = null;
-  private settings = loadSettings();
-  private active = false;
-  private showMarkers = true;
-  private frozen = false;
-  private panelMode: "settings" | "layout" | null = null;
-  private drawMode = false;
-  private designMode = false;
-  private blankCanvas = false;
-  private activeComponent: ComponentType | null = null;
-  private placements: DesignPlacement[] = [];
-  private rearrange: RearrangeState = { sections: [], originalOrder: [], detectedAt: Date.now() };
-  private wireframePurpose = "";
-  private drawStrokes: DrawStroke[] = [];
-  private drawing: DrawStroke | null = null;
-  private hoverTarget: HTMLElement | null = null;
-  private hoverRect: DOMRect | null = null;
-  private selectionStart: { x: number; y: number } | null = null;
-  private selectionCurrent: { x: number; y: number } | null = null;
-  private suppressClickUntil = 0;
-  private overlayDrag: OverlayDrag | null = null;
-  private rearrangedElements = new Map<string, MoveBackup>();
-  private placementRemoteIds = new Map<string, string>();
-  private rearrangeRemoteIds = new Map<string, string>();
-  private currentSessionId: string | null = null;
-  private syncGeneration = 0;
+  private config: AgentationConfig = {};
   private destroyed = false;
   private route = "";
-  private routeTimer: number | undefined;
+
+  // --- Shell ----------------------------------------------------------------
+  private settings: ToolbarSettings;
+  private theme: "dark" | "light";
+  private toolbarPosition: { x: number; y: number } | null;
+  private active = false;
+  private hidden: boolean;
+  private hiding = false;
+  private entrance = false;
+  private settingsOpen = false;
+  private settingsPage: SettingsPage = "main";
+  private tooltipsHidden = false;
+  private tooltipSession = false;
+
+  // --- Data -----------------------------------------------------------------
+  private annotations: Annotation[] = [];
+  private readonly exitingAnnotationIds = new Set<string>();
+  private readonly animatedAnnotationIds = new Set<string>();
+  private renumberFrom: number | null = null;
+
+  // --- Editing --------------------------------------------------------------
+  private editor: EditorState | null = null;
+  private pendingTarget: CollectedTarget | null = null;
+
+  // --- Interaction ----------------------------------------------------------
+  private markersVisible = true;
+  private markersExiting = false;
+  private hover: HoverState | null = null;
+  private hoveredAnnotationId: string | null = null;
+  private outlines: Outline[] = [];
+  private dragOrigin: { x: number; y: number } | null = null;
+  private dragSelection: Box | null = null;
+  private dragHighlights: Box[] = [];
+  private dragElements: HTMLElement[] = [];
+  private scrolling = false;
+  private suppressClickUntil = 0;
+  private toolbarDrag: { pointerX: number; pointerY: number; moved: boolean } | null = null;
+  /** Targets accumulated by modifier-clicking, committed when a modifier lifts. */
+  private multiSelect: HTMLElement[] = [];
+
+  // --- Layout mode ----------------------------------------------------------
+  private layoutActive = false;
+  private layoutExiting = false;
+  private wireframe = false;
+  private wireframeReady = false;
+  private wireframeOpacity = 1;
+  private wireframePurpose = "";
+  private activeComponent: ComponentType | null = null;
+  private placements: DesignPlacement[] = [];
+  private rearrange: RearrangeState;
+  private layoutInteracting = false;
+  private readonly rearrangedElements = new Map<string, MoveBackup>();
+
+  // --- Connectivity ---------------------------------------------------------
+  private connection: ConnectionStatus = "disconnected";
+  private sendState: SendState = "idle";
+  private copied = false;
+  private toast: string | null = null;
+
+  // --- Timers ---------------------------------------------------------------
   private toastTimer: number | undefined;
+  private copiedTimer: number | undefined;
+  private sendTimer: number | undefined;
+  private entranceTimer: number | undefined;
+  private hideTimer: number | undefined;
+  private renumberTimer: number | undefined;
+  private scrollTimer: number | undefined;
+  private routeTimer: number | undefined;
+  private layoutExitTimer: number | undefined;
+  private markerHideTimer: number | undefined;
+  private readonly markerExitTimers = new Map<string, number>();
 
   constructor(host: AgentationElement, config: AgentationConfig) {
     this.host = host;
-    this.document = host.ownerDocument;
-    this.window = (this.document.defaultView ?? window) as Window & typeof globalThis;
-    this.abort = new this.window.AbortController();
-    this.HTMLElementCtor = (this.window as Window & typeof globalThis).HTMLElement;
-    this.config = {};
-    this.shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
-
-    this.style = this.document.createElement("style");
-    this.style.textContent = AGENTATION_STYLES;
-    this.blankLayer = this.layer("div", "ag-blank");
-    this.canvas = this.layer("canvas", "ag-canvas") as HTMLCanvasElement;
-    this.overlayLayer = this.layer("div", "ag-overlays");
-    this.markerLayer = this.layer("div", "ag-markers");
-    this.hoverLayer = this.layer("div", "ag-hover-layer");
-    this.selectionLayer = this.layer("div", "ag-selection-layer");
-    this.panel = this.layer("div", "ag-panel");
-    this.popup = this.layer("div", "ag-popup");
-    this.toolbar = this.layer("div", "ag-toolbar");
-    this.toast = this.layer("div", "ag-toast");
-    this.toast.hidden = true;
-    this.shadow.replaceChildren(
-      this.style,
-      this.blankLayer,
-      this.canvas,
-      this.overlayLayer,
-      this.markerLayer,
-      this.hoverLayer,
-      this.selectionLayer,
-      this.panel,
-      this.popup,
-      this.toolbar,
-      this.toast,
+    this.environment = createRuntimeEnvironment(host.ownerDocument);
+    this.abort = new this.environment.AbortController();
+    this.storage = createRuntimeStorage(this.environment, (failure) =>
+      this.onStorageFailure(failure),
+    );
+    this.freeze = createAnimationFreezeController(this.environment.document);
+    this.view = createNativeAgentationView(this.environment, host, (intent) =>
+      this.dispatch(intent),
     );
 
-    this.route = this.pathname();
+    this.settings = this.storage.loadSettings();
+    this.theme = this.storage.loadTheme();
+    this.toolbarPosition = this.storage.loadToolbarPosition();
+    this.hidden = this.storage.loadToolbarHidden();
+    this.rearrange = emptyRearrange(this.environment.now());
+
+    this.sync = createRuntimeSync({
+      environment: this.environment,
+      scheduler: this.freeze.scheduler,
+      storage: this.storage,
+      localAnnotations: () => this.annotations,
+      onRemoteAnnotations: (records) => this.mergeRemote(records),
+      onRemoteRemoved: (id) => this.removeRemote(id),
+      onConnectionChange: (status) => {
+        this.connection = status;
+        this.render();
+      },
+      onSessionCreated: (sessionId) => {
+        this.emit({ type: "session-created", sessionId });
+        this.config.onSessionCreated?.(sessionId);
+      },
+      onError: (message, cause) => this.emitError("sync", message, true, cause),
+    });
+
+    this.route = this.currentRoute();
     this.loadRouteState();
+    this.applyAccent();
     this.installListeners();
     this.configure(config);
-    this.render();
-    this.routeTimer = this.window.setInterval(() => this.checkRoute(), 400);
 
-    if (config.enableDemoMode && config.demoAnnotations?.length) {
-      this.window.setTimeout(() => this.loadDemoAnnotations(), config.demoDelay ?? 1000);
-    }
+    // The entrance animation runs once per page load, not per SPA navigation.
+    this.entrance = true;
+    this.entranceTimer = this.freeze.scheduler.setTimeout(() => {
+      this.entrance = false;
+      this.render();
+    }, ENTRANCE_MS);
+
+    this.render();
   }
 
+  // ===========================================================================
+  // Public surface
+  // ===========================================================================
+
   configure(config: AgentationConfig): void {
-    if (this.destroyed) throw new Error("Agentation instance has been destroyed");
+    if (this.destroyed) throw new Error("Agentation controller has been destroyed");
     if (config.endpoint && !validHttpUrl(config.endpoint)) {
       throw new TypeError("Agentation endpoint must be an http(s) URL");
     }
     if (config.webhookUrl && !validHttpUrl(config.webhookUrl)) {
       throw new TypeError("Agentation webhookUrl must be an http(s) URL");
     }
-    const previousEndpoint = this.config.endpoint;
-    const previousSession = this.config.sessionId;
-    this.config = { ...config };
-    this.host.className = config.className ?? "";
-    if (previousEndpoint !== config.endpoint || previousSession !== config.sessionId) {
-      void this.initializeSync();
+
+    const previousClassName = this.config.className;
+    this.config = config;
+    if (previousClassName !== config.className) {
+      if (previousClassName) this.host.classList.remove(...previousClassName.split(/\s+/));
+      if (config.className) this.host.classList.add(...config.className.split(/\s+/));
     }
+
+    void this.sync.configure(config, this.route, this.annotations);
+    if (config.enableDemoMode) this.scheduleDemo();
     this.render();
   }
 
@@ -354,260 +307,489 @@ class NativeAgentation {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.syncGeneration += 1;
     this.abort.abort();
-    if (this.routeTimer !== undefined) this.window.clearInterval(this.routeTimer);
-    if (this.toastTimer !== undefined) this.window.clearTimeout(this.toastTimer);
-    if (this.frozen) unfreeze();
+    this.sync.destroy();
     this.restoreRearrangedElements();
-    instances.delete(this.document);
+
+    for (const handle of this.markerExitTimers.values()) {
+      this.freeze.scheduler.clearTimeout(handle);
+    }
+    this.markerExitTimers.clear();
+    for (const handle of [
+      this.toastTimer,
+      this.copiedTimer,
+      this.sendTimer,
+      this.entranceTimer,
+      this.hideTimer,
+      this.renumberTimer,
+      this.scrollTimer,
+      this.routeTimer,
+      this.layoutExitTimer,
+      this.markerHideTimer,
+    ]) {
+      this.freeze.scheduler.clearTimeout(handle);
+    }
+
+    // Unfreeze before destroy: the controller only uninstalls the window timer
+    // wrappers once no live instance still holds a freeze.
+    this.freeze.unfreeze();
+    this.freeze.destroy();
+    this.view.destroy();
+    instances.delete(this.environment.document);
   }
 
-  private layer<K extends keyof HTMLElementTagNameMap>(
-    tag: K,
-    className: string,
-  ): HTMLElementTagNameMap[K] {
-    const element = this.document.createElement(tag);
-    element.className = className;
-    element.setAttribute("data-agentation-ui", "");
-    return element;
-  }
+  // ===========================================================================
+  // Route
+  // ===========================================================================
 
-  private pathname(): string {
-    return `${this.window.location.pathname}${this.window.location.search}${this.window.location.hash}`;
+  private currentRoute(): string {
+    const { location } = this.environment.window;
+    return `${location.pathname}${location.search}${location.hash}`;
   }
 
   private checkRoute(): void {
-    const next = this.pathname();
+    const next = this.currentRoute();
     if (next === this.route) return;
-    this.route = next;
-    this.pending = null;
-    this.hoverTarget = null;
     this.restoreRearrangedElements();
+    this.route = next;
     this.loadRouteState();
-    void this.initializeSync();
+    void this.sync.configure(this.config, this.route, this.annotations);
     this.render();
   }
 
   private loadRouteState(): void {
-    this.annotations = loadAnnotations<Annotation>(this.route);
-    this.placements = loadDesignPlacements<DesignPlacement>(this.route);
-    this.rearrange = loadRearrangeState<RearrangeState>(this.route) ?? {
-      sections: [],
-      originalOrder: [],
-      detectedAt: Date.now(),
-    };
-    const wireframe = loadWireframeState<RearrangeState>(this.route);
-    this.wireframePurpose = wireframe?.purpose ?? "";
+    this.annotations = this.storage.loadAnnotations(this.route);
+    this.placements = this.storage.loadPlacements(this.route);
+    this.rearrange =
+      this.storage.loadRearrange(this.route) ?? emptyRearrange(this.environment.now());
+    this.wireframePurpose = this.storage.loadWireframe(this.route)?.purpose ?? "";
+    // Markers restored from storage must not replay the enter animation.
+    this.animatedAnnotationIds.clear();
+    for (const annotation of this.annotations) this.animatedAnnotationIds.add(annotation.id);
     this.emitAnnotations("load", this.annotations);
   }
 
   private saveRouteState(): void {
-    saveAnnotations(this.route, this.annotations);
-    if (this.blankCanvas) {
-      saveWireframeState(this.route, {
+    this.storage.saveAnnotations(this.route, this.annotations, this.sync.sessionId ?? undefined);
+    if (this.wireframe) {
+      this.storage.saveWireframe(this.route, {
         rearrange: this.rearrange,
         placements: this.placements,
         purpose: this.wireframePurpose,
       });
-      return;
+    } else {
+      this.storage.savePlacements(this.route, this.placements);
+      this.storage.saveRearrange(this.route, this.rearrange);
     }
-    if (this.placements.length) saveDesignPlacements(this.route, this.placements);
-    else clearDesignPlacements(this.route);
-    if (this.rearrange.sections.length) saveRearrangeState(this.route, this.rearrange);
-    else clearRearrangeState(this.route);
   }
+
+  // ===========================================================================
+  // Listeners
+  // ===========================================================================
 
   private installListeners(): void {
-    const signal = this.abort.signal;
-    this.shadow.addEventListener("click", (event) => this.onShadowClick(event), { signal });
-    this.shadow.addEventListener("input", (event) => this.onShadowInput(event), { signal });
-    this.shadow.addEventListener("change", (event) => this.onShadowChange(event), { signal });
-    this.shadow.addEventListener("pointerdown", (event) => this.onShadowPointerDown(event as PointerEvent), { signal });
-    this.shadow.addEventListener("pointermove", (event) => this.onCanvasPointerMove(event as PointerEvent), { signal });
-    this.shadow.addEventListener("pointerup", (event) => this.onCanvasPointerUp(event as PointerEvent), { signal });
-    this.shadow.addEventListener("contextmenu", (event) => event.stopPropagation(), { signal });
-    for (const name of ["click", "mousedown", "pointerdown"] as const) {
-      this.host.addEventListener(name, (event) => event.stopPropagation(), { signal });
-    }
+    const { signal } = this.abort;
+    const document = this.environment.document;
+    const view = this.environment.window;
 
-    this.document.addEventListener("mousemove", (event) => this.onDocumentMouseMove(event), {
-      signal,
-      passive: true,
-    });
-    this.document.addEventListener("mousedown", (event) => this.onDocumentMouseDown(event), {
-      signal,
-      capture: true,
-    });
-    this.document.addEventListener("mouseup", (event) => this.onDocumentMouseUp(event), {
+    document.addEventListener("mousemove", (event) => this.onPointerMove(event), { signal });
+    document.addEventListener("mousedown", (event) => this.onPointerDown(event), { signal });
+    document.addEventListener("mouseup", (event) => this.onPointerUp(event), { signal });
+    // Capture phase: a page handler must not act on a click the toolbar claims.
+    document.addEventListener("click", (event) => this.onClick(event), {
       signal,
       capture: true,
     });
-    this.document.addEventListener("click", (event) => this.onDocumentClick(event), {
-      signal,
-      capture: true,
-    });
-    this.document.addEventListener("keydown", (event) => this.onKeyDown(event), { signal });
-    this.window.addEventListener("scroll", () => this.renderPositions(), { signal, passive: true });
-    this.window.addEventListener("resize", () => {
-      this.resizeCanvas();
-      this.renderPositions();
-    }, { signal, passive: true });
-    this.window.addEventListener("pointermove", (event) => this.onOverlayPointerMove(event), { signal });
-    this.window.addEventListener("pointerup", () => this.onOverlayPointerUp(), { signal });
-    this.window.addEventListener("hashchange", () => this.checkRoute(), { signal });
-    this.window.addEventListener("popstate", () => this.checkRoute(), { signal });
+    document.addEventListener("keydown", (event) => this.onKeyDown(event), { signal });
+    document.addEventListener("keyup", (event) => this.onKeyUp(event), { signal });
+    // Losing the window drops the modifiers without a keyup, which would leave a
+    // modifier selection stranded and visible.
+    view.addEventListener("blur", () => this.cancelMultiSelect(), { signal });
+    view.addEventListener("scroll", () => this.onScroll(), { signal, passive: true });
+    view.addEventListener("resize", () => this.render(), { signal, passive: true });
+
+    // `pushState`/`replaceState` fire no event, so the route is polled. The
+    // unfrozen scheduler keeps this alive while the page is frozen.
+    const poll = (): void => {
+      if (this.destroyed) return;
+      this.checkRoute();
+      this.routeTimer = this.freeze.scheduler.setTimeout(poll, ROUTE_POLL_MS);
+    };
+    this.routeTimer = this.freeze.scheduler.setTimeout(poll, ROUTE_POLL_MS);
   }
 
+  /** True when the event originated inside Agentation's own UI. */
   private ownsEvent(event: Event): boolean {
     return event.composedPath().includes(this.host);
   }
 
-  private pageTarget(event: Event): HTMLElement | null {
-    for (const target of event.composedPath()) {
-      if (target === this.host) return null;
-      if (target instanceof this.HTMLElementCtor) return target;
-    }
-    return event.target instanceof this.HTMLElementCtor ? event.target : null;
+  private get targetContext(): TargetContext {
+    return {
+      environment: this.environment,
+      host: this.host,
+      adapters: this.config.metadata ?? [],
+      metadataEnabled: this.settings.metadataEnabled,
+      outputDetail: this.settings.outputDetail,
+      onMetadataError: (adapterId, cause) =>
+        this.emitError("metadata", `Metadata adapter "${adapterId}" failed`, true, cause),
+    };
   }
 
-  private onDocumentMouseMove(event: MouseEvent): void {
-    if (!this.active || this.pending || this.drawMode || this.designMode || this.ownsEvent(event)) {
-      this.hoverTarget = null;
-      this.hoverRect = null;
-      this.renderHover();
-      if (this.selectionStart) this.updateSelection(event.clientX, event.clientY);
+  private onScroll(): void {
+    this.scrolling = true;
+    this.freeze.scheduler.clearTimeout(this.scrollTimer);
+    this.scrollTimer = this.freeze.scheduler.setTimeout(() => {
+      this.scrolling = false;
+      this.render();
+    }, SCROLL_IDLE_MS);
+    this.render();
+  }
+
+  private onPointerMove(event: MouseEvent): void {
+    if (this.toolbarDrag) return;
+
+    if (this.dragOrigin) {
+      this.updateDragSelection(event);
       return;
     }
-    if (this.selectionStart) {
-      this.updateSelection(event.clientX, event.clientY);
+
+    if (!this.active || this.editor || this.layoutActive || this.ownsEvent(event)) {
+      if (this.hover) {
+        this.hover = null;
+        this.render();
+      }
       return;
     }
-    const target = this.pageTarget(event);
-    if (!target || target === this.document.body || target === this.document.documentElement) {
-      this.hoverTarget = null;
-      this.hoverRect = null;
-    } else if (target !== this.hoverTarget) {
-      this.hoverTarget = target;
-      this.hoverRect = target.getBoundingClientRect();
+
+    const element = deepElementFromPoint(event.clientX, event.clientY, this.targetContext);
+    if (!element) {
+      if (this.hover) {
+        this.hover = null;
+        this.render();
+      }
+      return;
     }
-    this.renderHover();
+
+    const target = collectTarget(element, event.clientX, event.clientY, this.targetContext);
+    this.hover = {
+      label: target.element,
+      elementName: target.element,
+      componentPath: target.framework?.componentPath?.join(" "),
+      rect: this.viewportBox(element.getBoundingClientRect()),
+      pointer: { x: event.clientX, y: event.clientY },
+    };
+    this.render();
   }
 
-  private onDocumentMouseDown(event: MouseEvent): void {
-    if (!this.active || this.pending || this.drawMode || this.designMode || this.ownsEvent(event)) return;
-    if (event.button !== 0) return;
-    const target = this.pageTarget(event);
-    if (!target) return;
-    if (this.settings.blockInteractions) event.preventDefault();
-    this.selectionStart = { x: event.clientX, y: event.clientY };
-    this.selectionCurrent = { ...this.selectionStart };
-  }
+  private updateDragSelection(event: MouseEvent): void {
+    const origin = this.dragOrigin;
+    if (!origin) return;
+    const width = Math.abs(event.clientX - origin.x);
+    const height = Math.abs(event.clientY - origin.y);
+    if (width <= DRAG_THRESHOLD && height <= DRAG_THRESHOLD) return;
 
-  private updateSelection(x: number, y: number): void {
-    if (!this.selectionStart) return;
-    this.selectionCurrent = { x, y };
-    this.renderSelection();
-  }
-
-  private onDocumentMouseUp(event: MouseEvent): void {
-    if (!this.selectionStart || !this.selectionCurrent) return;
-    const start = this.selectionStart;
-    const end = this.selectionCurrent;
-    this.selectionStart = null;
-    this.selectionCurrent = null;
-    this.renderSelection();
-    const width = Math.abs(end.x - start.x);
-    const height = Math.abs(end.y - start.y);
-    if (width < 8 && height < 8) return;
-    this.suppressClickUntil = performance.now() + 250;
-    event.preventDefault();
-    event.stopPropagation();
-    this.openMultiSelection(
-      new DOMRect(Math.min(start.x, end.x), Math.min(start.y, end.y), width, height),
+    this.dragSelection = {
+      x: Math.min(origin.x, event.clientX),
+      y: Math.min(origin.y, event.clientY),
+      width,
+      height,
+    };
+    this.dragElements = this.elementsInRect(this.dragSelection);
+    this.dragHighlights = this.dragElements.map((element) =>
+      this.viewportBox(element.getBoundingClientRect()),
     );
+    this.hover = null;
+    this.render();
   }
 
-  private onDocumentClick(event: MouseEvent): void {
-    if (!this.active || this.ownsEvent(event) || performance.now() < this.suppressClickUntil) return;
-    if (this.drawMode) return;
-    const target = this.pageTarget(event);
-    if (!target || target === this.document.body || target === this.document.documentElement) return;
+  private onPointerDown(event: MouseEvent): void {
+    if (!this.active || this.editor || this.layoutActive) return;
+    if (event.button !== 0 || this.ownsEvent(event)) return;
 
-    if (this.designMode) {
+    const element = deepElementFromPoint(event.clientX, event.clientY, this.targetContext);
+    // Text stays natively selectable: an area drag here would clobber the
+    // selection that a subsequent annotation is supposed to capture.
+    if (element && closestCrossingShadow(element, TEXT_SELECTION_SELECTOR)) return;
+
+    this.dragOrigin = { x: event.clientX, y: event.clientY };
+  }
+
+  private onPointerUp(event: MouseEvent): void {
+    const origin = this.dragOrigin;
+    const selection = this.dragSelection;
+    this.dragOrigin = null;
+    if (!origin || !selection) return;
+
+    // The click that ends a drag must not also open a single-element editor.
+    this.suppressClickUntil = this.environment.monotonic() + CLICK_SUPPRESSION_MS;
+
+    const elements = this.dragElements;
+    this.dragSelection = null;
+    this.dragHighlights = [];
+    this.dragElements = [];
+
+    // A rectangle covering real elements groups them; an empty one annotates the
+    // region itself. Both are the oracle's mouseup behaviour.
+    const target =
+      elements.length > 0
+        ? collectGroup(elements, this.targetContext)
+        : collectArea(
+            new this.environment.DOMRect(
+              selection.x,
+              selection.y,
+              selection.width,
+              selection.height,
+            ),
+            this.targetContext,
+          );
+
+    if (!target) {
+      this.render();
+      return;
+    }
+    this.openEditor(target);
+  }
+
+  private onClick(event: MouseEvent): void {
+    if (!this.active || this.layoutActive || this.editor) return;
+    if (this.ownsEvent(event)) return;
+    if (this.environment.monotonic() < this.suppressClickUntil) return;
+
+    const element = deepElementFromPoint(event.clientX, event.clientY, this.targetContext);
+    if (!element) return;
+
+    const primary = this.environment.isApplePlatform ? event.metaKey : event.ctrlKey;
+    if (primary && event.shiftKey) {
+      // Modifier selection accumulates targets instead of opening the popup.
       event.preventDefault();
       event.stopPropagation();
-      if (this.activeComponent) this.addPlacement(this.activeComponent, event.clientX, event.clientY);
-      else if (!this.blankCanvas) this.captureRearrangeTarget(target);
+      this.toggleMultiSelect(element);
       this.render();
       return;
     }
 
-    if (this.pending) {
+    if (closestCrossingShadow(element, INTERACTIVE_SELECTOR)) {
+      // With blocking off, the control is the user's: it acts and is not
+      // annotated. With blocking on, the click is consumed and annotated.
+      if (!this.settings.blockInteractions) return;
       event.preventDefault();
       event.stopPropagation();
-      this.flash("Finish or cancel the current annotation");
-      return;
     }
 
-    const interactive = target.closest("button, a, input, select, textarea, [role='button'], [onclick]");
-    if (interactive && !this.settings.blockInteractions) return;
-    event.preventDefault();
-    event.stopPropagation();
-    this.openPending(target, event.clientX, event.clientY);
+    const target = collectTarget(element, event.clientX, event.clientY, this.targetContext);
+    this.openEditor(target);
+  }
+
+  // ===========================================================================
+  // Modifier selection
+  // ===========================================================================
+
+  private toggleMultiSelect(element: HTMLElement): void {
+    const index = this.multiSelect.indexOf(element);
+    if (index === -1) this.multiSelect.push(element);
+    else this.multiSelect.splice(index, 1);
+    this.outlines = this.multiSelect.map((selected) => ({
+      kind: "multi" as const,
+      rect: this.viewportBox(selected.getBoundingClientRect()),
+    }));
+  }
+
+  private cancelMultiSelect(): void {
+    if (this.multiSelect.length === 0) return;
+    this.multiSelect = [];
+    this.outlines = [];
+    this.render();
+  }
+
+  /**
+   * Releasing either modifier ends the gesture: one target becomes an ordinary
+   * annotation, several become a single grouped one.
+   */
+  private commitMultiSelect(): void {
+    const elements = this.multiSelect;
+    this.multiSelect = [];
+    if (elements.length === 0) return;
+
+    if (elements.length === 1) {
+      const rect = elements[0].getBoundingClientRect();
+      this.openEditor(
+        collectTarget(
+          elements[0],
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+          this.targetContext,
+        ),
+      );
+      return;
+    }
+    this.openEditor(collectGroup(elements, this.targetContext));
+  }
+
+  private onKeyUp(event: KeyboardEvent): void {
+    if (this.multiSelect.length === 0) return;
+    const primary = this.environment.isApplePlatform ? event.metaKey : event.ctrlKey;
+    if (primary && event.shiftKey) return;
+    this.commitMultiSelect();
+    this.render();
   }
 
   private onKeyDown(event: KeyboardEvent): void {
-    if (event.key === "Escape") {
-      if (this.pending) this.pending = null;
-      else if (this.panelMode) this.panelMode = null;
-      else if (this.drawMode) this.drawMode = false;
-      else if (this.designMode) this.leaveDesignMode();
-      else if (this.active) this.deactivate();
+    // Ownership is deliberately NOT a blanket bail here. Clicking the collapsed
+    // circle leaves focus on the toolbar shell, and a control keeps focus after
+    // it is pressed, so a `composedPath()` test made every documented shortcut
+    // dead until the user clicked the page again. Agentation's own text entry is
+    // handled below instead: the popup textarea stops propagation outright, and
+    // the settings/layout fields are covered by the `typing` guard.
+    const target = event.target;
+    const typing =
+      target instanceof this.environment.HTMLInputElement ||
+      target instanceof this.environment.HTMLTextAreaElement ||
+      target instanceof this.environment.HTMLSelectElement ||
+      (target instanceof this.environment.HTMLElement && target.isContentEditable);
+
+    const modifier = this.environment.isApplePlatform ? event.metaKey : event.ctrlKey;
+    if (modifier && event.shiftKey && (event.key === "f" || event.key === "F")) {
+      event.preventDefault();
+      if (this.active) this.deactivate();
+      else this.activate();
       this.render();
       return;
     }
-    if (!this.active || event.repeat) return;
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && event.shiftKey) {
-      event.preventDefault();
-      void this.copyOutput(false);
+
+    if (event.key === "Escape") {
+      // A text field Agentation owns cancels itself; unwinding the whole toolbar
+      // from under it would lose the value the user was editing.
+      if (typing && this.ownsEvent(event)) return;
+      // Unwind one level at a time, innermost first: an armed layout tool, then
+      // layout mode, then a modifier selection or popup, then feedback mode.
+      if (this.layoutActive && this.activeComponent) this.activeComponent = null;
+      else if (this.layoutActive) this.leaveLayout();
+      else if (this.multiSelect.length > 0) this.cancelMultiSelect();
+      else if (this.editor) this.closeEditor();
+      else if (this.settingsOpen) this.settingsOpen = false;
+      else if (this.active) this.deactivate();
+      else return;
+      this.render();
+      return;
     }
+
+    if (!this.active) return;
+
+    // Typing in any field must never trigger a single-letter shortcut.
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+
+    switch (event.key) {
+      case "p":
+      case "P":
+        this.toggleFreeze();
+        break;
+      case "l":
+      case "L":
+        this.toggleLayout();
+        break;
+      case "h":
+      case "H":
+        if (this.annotations.length === 0) return;
+        this.toggleMarkers();
+        break;
+      case "c":
+      case "C":
+        void this.copyOutput(false);
+        break;
+      case "s":
+      case "S":
+        void this.copyOutput(true);
+        break;
+      case "x":
+      case "X":
+        void this.clearAll();
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    this.tooltipsHidden = true;
+    this.render();
   }
 
-  private onShadowClick(event: Event): void {
-    event.stopPropagation();
-    const target = event.target as HTMLElement;
-    const action = target.closest<HTMLElement>("[data-action]")?.dataset.action;
-    if (!action) return;
+  // ===========================================================================
+  // Geometry
+  // ===========================================================================
 
-    switch (action) {
-      case "toggle-active":
-        this.active ? this.deactivate() : this.activate();
+  private viewportBox(rect: DOMRect): Box {
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+  }
+
+  /**
+   * Elements meaningfully inside a drag rectangle. The original probed a grid of
+   * hit-test points rather than walking the DOM, which naturally respects
+   * stacking and overflow clipping; the same probe density is kept here.
+   */
+  private elementsInRect(rect: Box): HTMLElement[] {
+    const columns = Math.max(2, Math.min(AREA_PROBE_MAX, Math.ceil(rect.width / 80)));
+    const rows = Math.max(2, Math.min(AREA_PROBE_MAX, Math.ceil(rect.height / 60)));
+    const found: HTMLElement[] = [];
+    const seen = new Set<HTMLElement>();
+
+    for (let row = 0; row <= rows; row += 1) {
+      for (let column = 0; column <= columns; column += 1) {
+        const x = rect.x + (rect.width * column) / columns;
+        const y = rect.y + (rect.height * row) / rows;
+        const element = deepElementFromPoint(x, y, this.targetContext);
+        if (!element || seen.has(element)) continue;
+        seen.add(element);
+
+        const box = element.getBoundingClientRect();
+        if (box.width < 4 || box.height < 4) continue;
+        // Keep the outermost element of each subtree: a group annotation should
+        // name the card, not every span inside it.
+        if (found.some((existing) => existing.contains(element))) continue;
+        for (let index = found.length - 1; index >= 0; index -= 1) {
+          if (element.contains(found[index])) found.splice(index, 1);
+        }
+        found.push(element);
+      }
+    }
+    return found;
+  }
+
+  // ===========================================================================
+  // Intents
+  // ===========================================================================
+
+  private dispatch(intent: ViewIntent): void {
+    if (this.destroyed) return;
+
+    switch (intent.type) {
+      case "activate":
+        this.activate();
         break;
-      case "toggle-markers":
-        this.showMarkers = !this.showMarkers;
-        break;
-      case "toggle-draw":
-        this.drawMode = !this.drawMode;
-        this.designMode = false;
-        this.panelMode = null;
-        this.resizeCanvas();
-        break;
-      case "toggle-layout":
-        this.designMode = !this.designMode;
-        this.drawMode = false;
-        this.panelMode = this.designMode ? "layout" : null;
-        if (!this.designMode) this.restoreRearrangedElements();
+      case "deactivate":
+        this.deactivate();
         break;
       case "toggle-freeze":
-        this.frozen ? unfreeze() : freeze();
-        this.frozen = !this.frozen;
+        this.toggleFreeze();
         break;
-      case "settings":
-        this.panelMode = this.panelMode === "settings" ? null : "settings";
+      case "toggle-markers":
+        this.toggleMarkers();
         break;
-      case "close-panel":
-        this.panelMode = null;
+      case "toggle-layout":
+        this.toggleLayout();
+        break;
+      case "toggle-settings":
+        this.settingsOpen = !this.settingsOpen;
+        if (!this.settingsOpen) this.settingsPage = "main";
+        break;
+      case "settings-page":
+        this.settingsPage = intent.page;
+        break;
+      case "toggle-theme":
+        this.theme = this.theme === "dark" ? "light" : "dark";
+        this.storage.saveTheme(this.theme);
+        this.applyAccent();
+        break;
+      case "hide-until-restart":
+        this.hideUntilRestart();
         break;
       case "copy":
         void this.copyOutput(false);
@@ -618,566 +800,572 @@ class NativeAgentation {
       case "clear":
         void this.clearAll();
         break;
-      case "cancel-popup":
-        this.pending = null;
+      case "tooltips-hidden":
+        this.tooltipsHidden = intent.hidden;
         break;
-      case "save-popup":
-        void this.commitPending();
+      case "tooltip-session":
+        this.tooltipSession = intent.active;
         break;
-      case "delete-popup":
-        if (this.pending?.annotation) void this.deleteAnnotation(this.pending.annotation.id);
-        break;
-      case "marker": {
-        const id = target.closest<HTMLElement>("[data-id]")?.dataset.id;
-        if (id) {
-          if (this.settings.markerClickBehavior === "delete") void this.deleteAnnotation(id);
-          else this.editAnnotation(id);
-        }
-        break;
-      }
-      case "select-component": {
-        const component = target.closest<HTMLElement>("[data-component]")?.dataset.component as ComponentType;
-        this.activeComponent = this.activeComponent === component ? null : component;
-        break;
-      }
-      case "toggle-blank":
-        this.toggleBlankCanvas();
-        break;
-      case "delete-placement": {
-        const id = target.closest<HTMLElement>("[data-id]")?.dataset.id;
-        if (id) this.deletePlacement(id);
-        break;
-      }
-      case "delete-rearrange": {
-        const id = target.closest<HTMLElement>("[data-id]")?.dataset.id;
-        if (id) this.deleteRearrange(id);
-        break;
-      }
-      case "clear-drawings":
-        this.drawStrokes = [];
-        this.redrawCanvas();
-        break;
-    }
-    this.render();
-  }
-
-  private onShadowInput(event: Event): void {
-    const target = event.target as HTMLInputElement | HTMLTextAreaElement;
-    if (target.dataset.field === "comment" && this.pending) this.pending.draft = target.value;
-    if (target.dataset.field === "wireframe-purpose") {
-      this.wireframePurpose = target.value;
-      this.saveRouteState();
-    }
-    if (target.dataset.field === "webhook-url") {
-      this.settings.webhookUrl = target.value;
-      saveSettings(this.settings);
-    }
-  }
-
-  private onShadowChange(event: Event): void {
-    const target = event.target as HTMLInputElement | HTMLSelectElement;
-    const field = target.dataset.setting as keyof ToolbarSettings | undefined;
-    if (!field) return;
-    const value: unknown = target instanceof HTMLInputElement && target.type === "checkbox"
-      ? target.checked
-      : target.value;
-    (this.settings as unknown as Record<string, unknown>)[field] = value;
-    saveSettings(this.settings);
-    this.applyAccent();
-    this.render();
-  }
-
-  private onShadowPointerDown(event: PointerEvent): void {
-    event.stopPropagation();
-    const target = event.target as HTMLElement;
-    if (target === this.canvas && this.drawMode) {
-      event.preventDefault();
-      const stroke: DrawStroke = {
-        id: createId("stroke"),
-        points: [{ x: event.clientX, y: event.clientY + this.window.scrollY }],
-        color: COLOR_VALUES[this.settings.annotationColorId],
-      };
-      this.drawing = stroke;
-      this.drawStrokes.push(stroke);
-      this.canvas.setPointerCapture(event.pointerId);
-      return;
-    }
-
-    const overlay = target.closest<HTMLElement>("[data-overlay-kind]");
-    if (!overlay) return;
-    const kind = overlay.dataset.overlayKind as "placement" | "rearrange";
-    const id = overlay.dataset.id;
-    if (!id) return;
-    const resize = Boolean(target.closest("[data-resize]"));
-    const rect = kind === "placement"
-      ? this.placements.find((item) => item.id === id)
-      : this.rearrange.sections.find((item) => item.id === id)?.currentRect;
-    if (!rect) return;
-    event.preventDefault();
-    this.overlayDrag = {
-      kind,
-      id,
-      resize,
-      startX: event.clientX,
-      startY: event.clientY,
-      original: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-    };
-  }
-
-  private onCanvasPointerMove(event: PointerEvent): void {
-    if (!this.drawing || event.target !== this.canvas) return;
-    this.drawing.points.push({ x: event.clientX, y: event.clientY + this.window.scrollY });
-    this.redrawCanvas();
-  }
-
-  private onCanvasPointerUp(event: PointerEvent): void {
-    if (!this.drawing || event.target !== this.canvas) return;
-    this.drawing = null;
-    try {
-      this.canvas.releasePointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture may already have been released.
-    }
-    this.redrawCanvas();
-  }
-
-  private onOverlayPointerMove(event: PointerEvent): void {
-    const drag = this.overlayDrag;
-    if (!drag) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    const next = drag.resize
-      ? {
-          ...drag.original,
-          width: Math.max(24, drag.original.width + dx),
-          height: Math.max(18, drag.original.height + dy),
-        }
-      : {
-          ...drag.original,
-          x: drag.original.x + dx,
-          y: drag.original.y + dy,
+      case "drag-start":
+        this.toolbarDrag = {
+          pointerX: intent.pointerX,
+          pointerY: intent.pointerY,
+          moved: false,
         };
-    if (drag.kind === "placement") {
-      const item = this.placements.find((placement) => placement.id === drag.id);
-      if (item) Object.assign(item, next);
-    } else {
-      const item = this.rearrange.sections.find((section) => section.id === drag.id);
-      if (item) item.currentRect = next;
-      this.applyRearrangedElements();
+        break;
+      case "drag-move":
+        this.moveToolbar(intent.pointerX, intent.pointerY);
+        break;
+      case "drag-end":
+        if (this.toolbarDrag?.moved && this.toolbarPosition) {
+          this.storage.saveToolbarPosition(this.toolbarPosition);
+          this.suppressClickUntil = this.environment.monotonic() + CLICK_SUPPRESSION_MS;
+        }
+        this.toolbarDrag = null;
+        break;
+      case "settings-change":
+        this.applySettings(intent.patch);
+        break;
+      case "editor-input":
+        if (this.editor) this.editor = { ...this.editor, draft: intent.draft };
+        break;
+      case "editor-submit":
+        void this.commitEditor(intent.draft);
+        break;
+      case "editor-cancel":
+        // The popup already played its 150 ms exit before reporting this.
+        this.closeEditor();
+        break;
+      case "editor-delete": {
+        const id = this.editor?.annotationId;
+        this.closeEditor();
+        if (id) void this.deleteAnnotation(id);
+        break;
+      }
+      case "marker-click":
+        this.onMarkerClick(intent.id);
+        break;
+      case "marker-context":
+        void this.deleteAnnotation(intent.id);
+        break;
+      case "marker-hover":
+        this.onMarkerHover(intent.id);
+        break;
+      case "layout-select-component":
+        this.activeComponent = intent.component;
+        break;
+      case "layout-drop-component":
+        this.addPlacement(intent.component, intent.clientX, intent.clientY);
+        break;
+      case "layout-wireframe":
+        this.setWireframe(intent.enabled);
+        break;
+      case "layout-wireframe-purpose":
+        this.wireframePurpose = intent.purpose;
+        this.saveRouteState();
+        break;
+      case "layout-wireframe-opacity":
+        this.wireframeOpacity = intent.opacity;
+        break;
+      case "layout-clear":
+        this.clearLayout();
+        break;
+      case "layout-start-over":
+        this.clearLayout();
+        this.setWireframe(false);
+        break;
+      case "layout-interacting":
+        this.layoutInteracting = intent.interacting;
+        break;
+      case "placements-change":
+        this.placements = [...intent.placements];
+        this.saveRouteState();
+        break;
+      case "placement-sync":
+        void this.sync.add(this.placementAnnotation(intent.placement));
+        break;
+      case "placement-delete":
+        this.placements = this.placements.filter((placement) => placement.id !== intent.id);
+        this.saveRouteState();
+        void this.sync.delete(intent.id);
+        break;
+      case "rearrange-change":
+        this.rearrange = intent.state;
+        this.applyRearrangedElements();
+        this.saveRouteState();
+        break;
+      case "rearrange-sync":
+        void this.sync.add(this.rearrangeAnnotation(intent.section));
+        break;
+      case "rearrange-delete":
+        this.deleteRearrangeSection(intent.id);
+        break;
     }
-    this.renderOverlays();
+
+    this.render();
   }
 
-  private onOverlayPointerUp(): void {
-    const drag = this.overlayDrag;
-    if (!drag) return;
-    this.overlayDrag = null;
-    this.saveRouteState();
-    if (drag.kind === "placement") {
-      const placement = this.placements.find((item) => item.id === drag.id);
-      if (placement) void this.syncPlacement(placement);
-    } else {
-      const section = this.rearrange.sections.find((item) => item.id === drag.id);
-      if (section) void this.syncRearrangeSection(section);
-    }
-  }
+  // ===========================================================================
+  // Shell
+  // ===========================================================================
 
   private activate(): void {
     this.active = true;
+    this.hidden = false;
     this.applyAccent();
   }
 
   private deactivate(): void {
     this.active = false;
-    this.pending = null;
-    this.drawMode = false;
-    this.designMode = false;
-    this.panelMode = null;
-    this.hoverTarget = null;
-    this.hoverRect = null;
-    if (this.frozen) {
-      unfreeze();
-      this.frozen = false;
-    }
-    this.restoreRearrangedElements();
+    this.closeEditor();
+    this.settingsOpen = false;
+    this.hover = null;
+    this.dragOrigin = null;
+    this.dragSelection = null;
+    this.dragHighlights = [];
+    this.dragElements = [];
+    this.leaveLayout();
+    if (this.freeze.frozen) this.freeze.unfreeze();
   }
 
-  private leaveDesignMode(): void {
-    this.designMode = false;
-    this.activeComponent = null;
-    this.panelMode = null;
-    this.restoreRearrangedElements();
+  private applySettings(patch: Partial<ToolbarSettings>): void {
+    this.settings = { ...this.settings, ...patch };
+    this.storage.saveSettings(this.settings);
+    if (patch.annotationColorId !== undefined) this.applyAccent();
   }
 
-  private inspectMetadata(target: HTMLElement): Annotation["framework"] {
-    if (!this.settings.metadataEnabled) return undefined;
-    for (const adapter of this.config.metadata ?? []) {
-      try {
-        const result = adapter.inspect(target);
-        if (!result) continue;
-        const name = result.framework || adapter.id;
-        return {
-          name,
-          componentPath: result.componentPath ? [...result.componentPath] : undefined,
-          source: result.source ? { ...result.source } : undefined,
-          confidence: result.confidence,
-        };
-      } catch (cause) {
-        this.emitError("metadata", `Metadata adapter ${adapter.id} failed`, true, cause);
-      }
-    }
-    return undefined;
-  }
-
-  private collectTarget(target: HTMLElement, x: number, y: number): CollectedTarget {
-    const identified = identifyElement(target);
-    const rect = target.getBoundingClientRect();
-    const fixed = isFixed(target);
-    const selection = this.window.getSelection()?.toString().trim().slice(0, 500) || undefined;
-    const styles = Object.entries(getDetailedComputedStyles(target))
-      .map(([name, value]) => `${name}: ${value}`)
-      .join("; ");
-    const framework = this.inspectMetadata(target);
-    const source = framework?.source
-      ? [framework.source.file, framework.source.line, framework.source.column]
-          .filter((part) => part !== undefined)
-          .join(":")
-      : undefined;
-    return {
-      x: (x / this.window.innerWidth) * 100,
-      y: fixed ? y : y + this.window.scrollY,
-      element: identified.name,
-      elementPath: identified.path,
-      selectedText: selection,
-      boundingBox: {
-        x: rect.left,
-        y: fixed ? rect.top : rect.top + this.window.scrollY,
-        width: rect.width,
-        height: rect.height,
-      },
-      nearbyText: getNearbyText(target),
-      cssClasses: getElementClasses(target),
-      nearbyElements: getNearbyElements(target),
-      computedStyles: styles,
-      fullPath: getFullElementPath(target),
-      accessibility: getAccessibilityInfo(target),
-      isFixed: fixed,
-      framework,
-      reactComponents: framework?.name === "react" && framework.componentPath
-        ? framework.componentPath.join(" > ")
-        : undefined,
-      sourceFile: source,
-    };
-  }
-
-  private openPending(target: HTMLElement, x: number, y: number): void {
-    this.pending = { mode: "add", clientX: x, clientY: y, draft: "", target: this.collectTarget(target, x, y) };
+  private hideUntilRestart(): void {
+    this.storage.saveToolbarHidden(true);
+    this.hiding = true;
+    this.settingsOpen = false;
     this.render();
-    this.focusPopup();
-  }
-
-  private openMultiSelection(rect: DOMRect): void {
-    const found = new Set<HTMLElement>();
-    const columns = Math.max(2, Math.min(8, Math.ceil(rect.width / 80)));
-    const rows = Math.max(2, Math.min(8, Math.ceil(rect.height / 60)));
-    for (let col = 0; col <= columns; col += 1) {
-      for (let row = 0; row <= rows; row += 1) {
-        const x = rect.left + (rect.width * col) / columns;
-        const y = rect.top + (rect.height * row) / rows;
-        for (const element of this.document.elementsFromPoint(x, y)) {
-          if (element === this.host || this.host.contains(element)) continue;
-          if (!(element instanceof this.HTMLElementCtor)) continue;
-          const candidateRect = element.getBoundingClientRect();
-          if (candidateRect.width > 0 && candidateRect.height > 0 && intersects(rect, candidateRect)) {
-            found.add(element);
-            break;
-          }
-        }
-      }
-    }
-    const elements = [...found];
-    if (!elements.length) return;
-    const first = elements[0];
-    const target = this.collectTarget(first, rect.left + rect.width / 2, rect.top + rect.height / 2);
-    target.element = `${elements.length} selected elements`;
-    target.isMultiSelect = true;
-    target.boundingBox = {
-      x: rect.left,
-      y: rect.top + this.window.scrollY,
-      width: rect.width,
-      height: rect.height,
-    };
-    target.elementBoundingBoxes = elements.map((element) => {
-      const box = element.getBoundingClientRect();
-      return { x: box.left, y: box.top + this.window.scrollY, width: box.width, height: box.height };
-    });
-    this.pending = {
-      mode: "add",
-      clientX: rect.left + rect.width / 2,
-      clientY: rect.top + rect.height / 2,
-      draft: "",
-      target,
-    };
-    this.render();
-    this.focusPopup();
-  }
-
-  private focusPopup(): void {
-    this.window.setTimeout(() => this.popup.querySelector<HTMLTextAreaElement>("textarea")?.focus(), 0);
-  }
-
-  private nearestDrawingIndex(target: CollectedTarget): number | undefined {
-    const px = (target.x / 100) * this.window.innerWidth;
-    const py = target.isFixed ? target.y + this.window.scrollY : target.y;
-    let best: { index: number; distance: number } | undefined;
-    this.drawStrokes.forEach((stroke, index) => {
-      for (const point of stroke.points) {
-        const distance = Math.hypot(point.x - px, point.y - py);
-        if (distance <= 24 && (!best || distance < best.distance)) best = { index, distance };
-      }
-    });
-    return best?.index;
-  }
-
-  private async commitPending(): Promise<void> {
-    const pending = this.pending;
-    if (!pending || !pending.draft.trim()) {
-      this.flash("Add a feedback note first");
-      return;
-    }
-    if (pending.mode === "edit" && pending.annotation) {
-      const annotation = { ...pending.annotation, comment: pending.draft.trim(), updatedAt: new Date().toISOString() };
-      this.annotations = this.annotations.map((item) => item.id === annotation.id ? annotation : item);
-      this.pending = null;
-      this.saveRouteState();
-      this.config.onAnnotationUpdate?.(annotation);
-      this.emitAnnotations("update", [annotation]);
-      void this.fireWebhook("annotation.update", { annotation });
-      if (this.config.endpoint) {
-        void updateAnnotationOnServer(this.config.endpoint, annotation.id, { comment: annotation.comment })
-          .catch((cause) => this.emitError("sync", "Failed to update annotation", true, cause));
-      }
+    this.hideTimer = this.freeze.scheduler.setTimeout(() => {
+      this.hiding = false;
+      this.hidden = true;
+      this.deactivate();
       this.render();
-      return;
-    }
-    if (!pending.target) return;
-    const annotation: Annotation = {
-      ...pending.target,
-      id: createId(),
-      comment: pending.draft.trim(),
-      timestamp: Date.now(),
-      drawingIndex: this.nearestDrawingIndex(pending.target),
-      url: this.pathname(),
-      status: "pending",
-    };
-    this.annotations = [...this.annotations, annotation];
-    this.pending = null;
-    this.saveRouteState();
-    this.config.onAnnotationAdd?.(annotation);
-    this.emitAnnotations("add", [annotation]);
-    void this.fireWebhook("annotation.add", { annotation });
-    void this.syncNewAnnotation(annotation);
-    this.render();
+    }, HIDE_MS);
   }
 
-  private editAnnotation(id: string): void {
+  private toggleFreeze(): void {
+    if (this.freeze.frozen) this.freeze.unfreeze();
+    else this.freeze.freeze();
+  }
+
+  private toggleMarkers(): void {
+    if (!this.markersVisible) {
+      this.markersVisible = true;
+      return;
+    }
+    this.markersExiting = true;
+    this.freeze.scheduler.clearTimeout(this.markerHideTimer);
+    this.markerHideTimer = this.freeze.scheduler.setTimeout(() => {
+      this.markersExiting = false;
+      this.markersVisible = false;
+      this.render();
+    }, MARKER_EXIT_MS);
+  }
+
+  /** Accent and theme ride on host attributes so `_tokens.scss` owns the values. */
+  private applyAccent(): void {
+    const accent =
+      ACCENT_OPTIONS.find((option) => option.id === this.settings.annotationColorId) ??
+      ACCENT_OPTIONS[1];
+    this.host.setAttribute("data-agentation-accent", accent.id);
+    this.host.setAttribute("data-agentation-theme", this.theme);
+  }
+
+
+  private moveToolbar(pointerX: number, pointerY: number): void {
+    const drag = this.toolbarDrag;
+    if (!drag) return;
+    const dx = pointerX - drag.pointerX;
+    const dy = pointerY - drag.pointerY;
+    if (
+      !drag.moved &&
+      Math.abs(dx) < TOOLBAR_DRAG_THRESHOLD &&
+      Math.abs(dy) < TOOLBAR_DRAG_THRESHOLD
+    ) {
+      return;
+    }
+    drag.moved = true;
+
+    const base = this.toolbarPosition ?? {
+      x: this.environment.innerWidth - TOOLBAR_WIDTH - TOOLBAR_VIEWPORT_PADDING,
+      y: this.environment.innerHeight - TOOLBAR_HEIGHT - TOOLBAR_VIEWPORT_PADDING,
+    };
+    const maxX = this.environment.innerWidth - TOOLBAR_WIDTH - TOOLBAR_VIEWPORT_PADDING;
+    const maxY = this.environment.innerHeight - TOOLBAR_HEIGHT - TOOLBAR_VIEWPORT_PADDING;
+    this.toolbarPosition = {
+      x: Math.max(TOOLBAR_VIEWPORT_PADDING, Math.min(maxX, base.x + dx)),
+      y: Math.max(TOOLBAR_VIEWPORT_PADDING, Math.min(maxY, base.y + dy)),
+    };
+    drag.pointerX = pointerX;
+    drag.pointerY = pointerY;
+  }
+
+  // ===========================================================================
+  // Editor
+  // ===========================================================================
+
+  private openEditor(target: CollectedTarget): void {
+    this.pendingTarget = target;
+    this.editor = {
+      mode: "add",
+      x: target.x,
+      y: target.y,
+      isFixed: target.isFixed ?? false,
+      element: target.element,
+      selectedText: target.selectedText,
+      draft: "",
+      isMultiSelect: target.isMultiSelect ?? false,
+      computedStyles: target.computedStylesObject,
+      exiting: false,
+    };
+    this.hover = null;
+    this.outlines = this.outlinesFor(target.boundingBox, target.isMultiSelect ?? false);
+    this.render();
+    this.view.focusEditor();
+  }
+
+  private closeEditor(): void {
+    this.editor = null;
+    this.pendingTarget = null;
+    this.outlines = [];
+  }
+
+  private outlinesFor(box: Box | undefined, multi: boolean): Outline[] {
+    return box ? [{ kind: multi ? "multi" : "single", rect: box }] : [];
+  }
+
+  private onMarkerClick(id: string): void {
+    if (this.settings.markerClickBehavior === "delete") {
+      void this.deleteAnnotation(id);
+      return;
+    }
     const annotation = this.annotations.find((item) => item.id === id);
     if (!annotation) return;
-    const x = (annotation.x / 100) * this.window.innerWidth;
-    const y = annotation.isFixed ? annotation.y : annotation.y - this.window.scrollY;
-    this.pending = {
+
+    this.pendingTarget = null;
+    this.editor = {
       mode: "edit",
-      clientX: x,
-      clientY: y,
+      x: annotation.x,
+      y: annotation.y,
+      isFixed: annotation.isFixed ?? false,
+      element: annotation.element,
+      selectedText: annotation.selectedText,
       draft: annotation.comment,
-      annotation,
+      isMultiSelect: annotation.isMultiSelect ?? false,
+      annotationId: annotation.id,
+      exiting: false,
     };
+    this.outlines = this.outlinesFor(annotation.boundingBox, annotation.isMultiSelect ?? false);
     this.render();
-    this.focusPopup();
+    this.view.focusEditor();
+  }
+
+  private onMarkerHover(id: string | null): void {
+    this.hoveredAnnotationId = id;
+    if (!id) {
+      if (!this.editor) this.outlines = [];
+      return;
+    }
+    const annotation = this.annotations.find((item) => item.id === id);
+    if (!annotation) return;
+
+    const kind: Outline["kind"] = annotation.isMultiSelect ? "multi" : "single";
+    const boxes = annotation.elementBoundingBoxes ?? [];
+    this.outlines =
+      boxes.length > 0
+        ? boxes.map((rect) => ({ kind, rect }))
+        : this.outlinesFor(annotation.boundingBox, annotation.isMultiSelect ?? false);
+  }
+
+  private async commitEditor(draft: string): Promise<void> {
+    const editor = this.editor;
+    const comment = draft.trim();
+    if (!editor || !comment) {
+      this.view.shakeEditor();
+      return;
+    }
+
+    if (editor.mode === "edit" && editor.annotationId) {
+      const id = editor.annotationId;
+      let updated: Annotation | undefined;
+      this.annotations = this.annotations.map((annotation) => {
+        if (annotation.id !== id) return annotation;
+        updated = { ...annotation, comment };
+        return updated;
+      });
+      this.closeEditor();
+      this.saveRouteState();
+      this.render();
+
+      if (!updated) return;
+      this.emitAnnotations("update", [updated]);
+      this.config.onAnnotationUpdate?.({ ...updated });
+      void this.sync.update(updated);
+      void this.fireWebhook("annotation.update", { annotation: updated });
+      return;
+    }
+
+    const target = this.pendingTarget;
+    if (!target) return;
+
+    const annotation: Annotation = {
+      ...target,
+      id: this.environment.randomId("ann"),
+      comment,
+      timestamp: this.environment.now(),
+      kind: "feedback",
+    };
+    // Absent from `animatedAnnotationIds`, so the marker plays its entrance.
+    this.annotations = [...this.annotations, annotation];
+    this.closeEditor();
+    this.saveRouteState();
+    this.render();
+
+    this.emitAnnotations("add", [annotation]);
+    this.config.onAnnotationAdd?.({ ...annotation });
+    void this.sync.add(annotation);
+    void this.fireWebhook("annotation.add", { annotation });
   }
 
   private async deleteAnnotation(id: string): Promise<void> {
     const annotation = this.annotations.find((item) => item.id === id);
     if (!annotation) return;
-    this.annotations = this.annotations.filter((item) => item.id !== id);
-    this.pending = null;
-    this.saveRouteState();
-    this.config.onAnnotationDelete?.(annotation);
-    this.emitAnnotations("delete", [annotation]);
-    void this.fireWebhook("annotation.delete", { annotation });
-    if (this.config.endpoint) {
-      void deleteAnnotationFromServer(this.config.endpoint, id)
-        .catch((cause) => this.emitError("sync", "Failed to delete annotation", true, cause));
-    }
+
+    const index = this.annotations.indexOf(annotation);
+    this.exitingAnnotationIds.add(id);
+    if (this.editor?.annotationId === id) this.closeEditor();
     this.render();
+
+    const handle = this.freeze.scheduler.setTimeout(() => {
+      this.markerExitTimers.delete(id);
+      this.exitingAnnotationIds.delete(id);
+      this.annotations = this.annotations.filter((item) => item.id !== id);
+      this.animatedAnnotationIds.delete(id);
+      this.saveRouteState();
+      this.startRenumber(index);
+      this.render();
+    }, MARKER_EXIT_MS);
+    this.markerExitTimers.set(id, handle);
+
+    this.emitAnnotations("delete", [annotation]);
+    this.config.onAnnotationDelete?.({ ...annotation });
+    void this.sync.delete(id);
+    void this.fireWebhook("annotation.delete", { annotation });
+  }
+
+  private startRenumber(from: number): void {
+    this.renumberFrom = from;
+    this.freeze.scheduler.clearTimeout(this.renumberTimer);
+    this.renumberTimer = this.freeze.scheduler.setTimeout(() => {
+      this.renumberFrom = null;
+      this.render();
+    }, RENUMBER_MS);
   }
 
   private async clearAll(): Promise<void> {
-    if (!this.annotations.length && !this.placements.length && !this.rearrange.sections.length && !this.drawStrokes.length) return;
+    const hadLayout = this.placements.length > 0 || this.rearrange.sections.length > 0;
+    if (this.annotations.length === 0 && !hadLayout) return;
+
     const removed = [...this.annotations];
-    const remoteDesignIds = [
-      ...this.placements.map((placement) => this.placementRemoteIds.get(placement.id) ?? placement.id),
-      ...this.rearrange.sections.map((section) => this.rearrangeRemoteIds.get(section.id) ?? section.id),
-    ];
+    const ids = removed.map((annotation) => annotation.id);
+
     this.annotations = [];
-    this.placements = [];
-    this.rearrange = { sections: [], originalOrder: [], detectedAt: Date.now() };
-    this.drawStrokes = [];
-    this.pending = null;
-    clearStoredAnnotations(this.route);
-    clearDesignPlacements(this.route);
-    clearRearrangeState(this.route);
-    clearWireframeState(this.route);
-    this.restoreRearrangedElements();
-    this.placementRemoteIds.clear();
-    this.rearrangeRemoteIds.clear();
-    this.config.onAnnotationsClear?.(removed);
+    this.exitingAnnotationIds.clear();
+    this.animatedAnnotationIds.clear();
+    this.closeEditor();
+    this.clearLayout();
+    this.storage.clearAnnotations(this.route);
+    this.render();
+
+    if (removed.length === 0) return;
     this.emitAnnotations("clear", removed);
+    this.config.onAnnotationsClear?.(removed.map((annotation) => ({ ...annotation })));
+    void this.sync.clear(ids);
     void this.fireWebhook("annotations.clear", { annotations: removed });
-    if (this.config.endpoint) {
-      for (const id of [...removed.map((annotation) => annotation.id), ...remoteDesignIds]) {
-        void deleteAnnotationFromServer(this.config.endpoint, id).catch(() => undefined);
-      }
+  }
+
+  // ===========================================================================
+  // Remote state
+  // ===========================================================================
+
+  private mergeRemote(records: readonly Annotation[]): void {
+    if (records.length === 0) return;
+    const byId = new Map(this.annotations.map((annotation) => [annotation.id, annotation]));
+    for (const record of records) {
+      // Server records were already rendered elsewhere, so they must not replay
+      // the entrance animation on this client.
+      this.animatedAnnotationIds.add(record.id);
+      byId.set(record.id, record);
     }
-    this.redrawCanvas();
+    this.annotations = [...byId.values()].sort((a, b) => a.timestamp - b.timestamp);
+    this.emitAnnotations("remote", records);
     this.render();
   }
 
-  private output(): string {
-    const chunks: string[] = [];
-    const feedback = generateOutput(this.annotations, this.route, this.settings.outputDetail);
-    if (feedback) chunks.push(feedback);
-    const design = generateDesignOutput(
-      this.placements,
-      { width: this.window.innerWidth, height: this.window.innerHeight },
-      { blankCanvas: this.blankCanvas, wireframePurpose: this.wireframePurpose },
-      this.settings.outputDetail,
-    );
-    if (design) chunks.push(design);
-    const rearrange = generateRearrangeOutput(
-      this.rearrange,
-      this.settings.outputDetail,
-      { width: this.window.innerWidth, height: this.window.innerHeight },
-    );
-    if (rearrange) chunks.push(rearrange);
-    return chunks.join("\n\n---\n\n");
+  private removeRemote(id: string): void {
+    if (!this.annotations.some((annotation) => annotation.id === id)) return;
+    this.annotations = this.annotations.filter((annotation) => annotation.id !== id);
+    this.animatedAnnotationIds.delete(id);
+    this.saveRouteState();
+    this.render();
   }
 
-  private async copyOutput(submit: boolean): Promise<void> {
-    const output = this.output();
-    if (!output) {
-      this.flash("Nothing to copy");
+  // ===========================================================================
+  // Layout mode
+  // ===========================================================================
+
+  private toggleLayout(): void {
+    if (this.layoutActive) {
+      this.leaveLayout();
       return;
     }
-    const detail: AgentationEventDetail = submit
-      ? { type: "submit", output, annotations: this.annotations }
-      : { type: "copy", output, annotations: this.annotations };
-    const event = this.emit(detail, true);
-    if (submit) this.config.onSubmit?.(output, [...this.annotations]);
-    else this.config.onCopy?.(output);
+    this.layoutActive = true;
+    this.layoutExiting = false;
+    this.settingsOpen = false;
+    this.closeEditor();
+    this.hover = null;
+    this.wireframeReady = true;
+    this.applyRearrangedElements();
+  }
 
-    if (!event.defaultPrevented && this.config.copyToClipboard !== false) {
-      try {
-        await this.window.navigator.clipboard.writeText(output);
-      } catch (cause) {
-        this.emitError("clipboard", "Failed to copy annotations", true, cause);
-      }
+  private leaveLayout(): void {
+    if (!this.layoutActive) return;
+    this.layoutActive = false;
+    this.layoutExiting = true;
+    this.activeComponent = null;
+    this.layoutInteracting = false;
+    this.restoreRearrangedElements();
+    this.freeze.scheduler.clearTimeout(this.layoutExitTimer);
+    this.layoutExitTimer = this.freeze.scheduler.setTimeout(() => {
+      this.layoutExiting = false;
+      this.render();
+    }, MARKER_EXIT_MS);
+  }
+
+  private setWireframe(enabled: boolean): void {
+    if (this.wireframe === enabled) return;
+    this.wireframe = enabled;
+    this.wireframeReady = false;
+
+    if (enabled) {
+      // Entering wireframe parks the explore-mode layout so leaving it restores
+      // exactly what the user had before the blank canvas appeared.
+      this.storage.savePlacements(this.route, this.placements);
+      this.storage.saveRearrange(this.route, this.rearrange);
+      const stash = this.storage.loadWireframe(this.route);
+      this.placements = stash?.placements ?? [];
+      this.rearrange = stash?.rearrange ?? emptyRearrange(this.environment.now());
+      this.wireframePurpose = stash?.purpose ?? "";
+      this.restoreRearrangedElements();
+    } else {
+      this.storage.saveWireframe(this.route, {
+        rearrange: this.rearrange,
+        placements: this.placements,
+        purpose: this.wireframePurpose,
+      });
+      this.placements = this.storage.loadPlacements(this.route);
+      this.rearrange =
+        this.storage.loadRearrange(this.route) ?? emptyRearrange(this.environment.now());
+      this.applyRearrangedElements();
     }
-    if (submit && this.config.endpoint && this.currentSessionId) {
-      try {
-        await requestAction(this.config.endpoint, this.currentSessionId, output);
-      } catch (cause) {
-        this.emitError("sync", "Failed to send annotations to the agent", true, cause);
-      }
-    }
-    if (submit) void this.fireWebhook("annotations.submit", { output, annotations: this.annotations }, true);
-    this.flash(submit ? "Sent" : "Copied");
-    if (this.settings.autoClearAfterCopy) await this.clearAll();
+    this.wireframeReady = true;
+  }
+
+  private clearLayout(): void {
+    this.restoreRearrangedElements();
+    this.placements = [];
+    this.rearrange = emptyRearrange(this.environment.now());
+    this.wireframePurpose = "";
+    this.activeComponent = null;
+    this.storage.clearPlacements(this.route);
+    this.storage.clearRearrange(this.route);
+    this.storage.clearWireframe(this.route);
   }
 
   private addPlacement(type: ComponentType, clientX: number, clientY: number): void {
     const size = DEFAULT_SIZES[type];
     const placement: DesignPlacement = {
-      id: createId("placement"),
+      id: this.environment.randomId("placement"),
       type,
-      x: Math.max(0, clientX - size.width / 2),
-      y: Math.max(0, clientY + this.window.scrollY - size.height / 2),
+      x: clientX,
+      y: clientY + this.environment.scrollY,
       width: size.width,
       height: size.height,
-      scrollY: this.window.scrollY,
-      timestamp: Date.now(),
+      scrollY: this.environment.scrollY,
+      timestamp: this.environment.now(),
     };
     this.placements = [...this.placements, placement];
     this.activeComponent = null;
     this.saveRouteState();
-    void this.syncPlacement(placement);
+    void this.sync.add(this.placementAnnotation(placement));
   }
 
-  private deletePlacement(id: string): void {
-    this.placements = this.placements.filter((placement) => placement.id !== id);
-    this.saveRouteState();
-    const remoteId = this.placementRemoteIds.get(id) ?? id;
-    this.placementRemoteIds.delete(id);
-    if (this.config.endpoint) void deleteAnnotationFromServer(this.config.endpoint, remoteId).catch(() => undefined);
-  }
-
-  private captureRearrangeTarget(target: HTMLElement): void {
-    const selector = uniqueSelector(target);
-    if (this.rearrange.sections.some((section) => section.selector === selector)) return;
-    const rect = target.getBoundingClientRect();
-    const identified = identifyElement(target);
-    const section: DetectedSection = {
-      id: createId("section"),
-      label: identified.name,
-      tagName: target.localName,
-      selector,
-      role: target.getAttribute("role"),
-      className: target.className || null,
-      textSnippet: target.textContent?.trim().slice(0, 120) || null,
-      originalRect: {
-        x: rect.left,
-        y: rect.top + this.window.scrollY,
-        width: rect.width,
-        height: rect.height,
+  private placementAnnotation(placement: DesignPlacement): Annotation {
+    return {
+      id: placement.id,
+      x: (placement.x / this.environment.innerWidth) * 100,
+      y: placement.y,
+      comment: `Place a ${placement.type}`,
+      element: placement.type,
+      elementPath: `layout > ${placement.type}`,
+      timestamp: placement.timestamp,
+      kind: "placement",
+      placement: {
+        componentType: placement.type,
+        width: placement.width,
+        height: placement.height,
+        scrollY: placement.scrollY,
+        text: placement.text,
       },
-      currentRect: {
-        x: rect.left,
-        y: rect.top + this.window.scrollY,
-        width: rect.width,
-        height: rect.height,
-      },
-      originalIndex: this.rearrange.sections.length,
-      isFixed: isFixed(target),
     };
-    this.rearrange = {
-      ...this.rearrange,
-      sections: [...this.rearrange.sections, section],
-      originalOrder: [...this.rearrange.originalOrder, section.id],
-    };
-    this.saveRouteState();
-    void this.syncRearrangeSection(section);
   }
 
-  private deleteRearrange(id: string): void {
+  private rearrangeAnnotation(section: DetectedSection): Annotation {
+    return {
+      id: section.id,
+      x: (section.currentRect.x / this.environment.innerWidth) * 100,
+      y: section.currentRect.y,
+      comment: section.note ?? `Move ${section.label}`,
+      element: section.label,
+      elementPath: section.selector,
+      timestamp: this.environment.now(),
+      kind: "rearrange",
+      rearrange: {
+        selector: section.selector,
+        label: section.label,
+        tagName: section.tagName,
+        originalRect: section.originalRect,
+        currentRect: section.currentRect,
+      },
+    };
+  }
+
+  private deleteRearrangeSection(id: string): void {
     const backup = this.rearrangedElements.get(id);
     if (backup) this.restoreElement(backup);
     this.rearrangedElements.delete(id);
     this.rearrange = {
       ...this.rearrange,
       sections: this.rearrange.sections.filter((section) => section.id !== id),
-      originalOrder: this.rearrange.originalOrder.filter((item) => item !== id),
     };
     this.saveRouteState();
-    const remoteId = this.rearrangeRemoteIds.get(id) ?? id;
-    this.rearrangeRemoteIds.delete(id);
-    if (this.config.endpoint) void deleteAnnotationFromServer(this.config.endpoint, remoteId).catch(() => undefined);
+    void this.sync.delete(id);
   }
 
+  /**
+   * Layout mode moves real page elements. Their original inline styles are
+   * captured on first move and restored verbatim on exit, so a page that styled
+   * `transform` itself is handed back unchanged.
+   */
   private applyRearrangedElements(): void {
     for (const section of this.rearrange.sections) {
       let backup = this.rearrangedElements.get(section.id);
       if (!backup) {
-        const element = this.document.querySelector<HTMLElement>(section.selector);
+        const element = this.environment.document.querySelector<HTMLElement>(section.selector);
         if (!element) continue;
         backup = {
           element,
@@ -1189,24 +1377,34 @@ class NativeAgentation {
         };
         this.rearrangedElements.set(section.id, backup);
       }
+
       const dx = section.currentRect.x - section.originalRect.x;
       const dy = section.currentRect.y - section.originalRect.y;
-      const sx = section.originalRect.width ? section.currentRect.width / section.originalRect.width : 1;
-      const sy = section.originalRect.height ? section.currentRect.height / section.originalRect.height : 1;
-      backup.element.style.transformOrigin = "top left";
-      backup.element.style.transition = "none";
-      backup.element.style.position ||= "relative";
-      backup.element.style.zIndex = "9999";
-      backup.element.style.transform = `${backup.transform ? `${backup.transform} ` : ""}translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+      const sx = section.originalRect.width
+        ? section.currentRect.width / section.originalRect.width
+        : 1;
+      const sy = section.originalRect.height
+        ? section.currentRect.height / section.originalRect.height
+        : 1;
+
+      const style = backup.element.style;
+      style.transformOrigin = "top left";
+      style.transition = "none";
+      // A statically positioned element ignores `z-index`, so it needs a
+      // position before it can be lifted above its neighbours.
+      if (style.position === "") style.position = "relative";
+      style.zIndex = "9999";
+      style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
     }
   }
 
   private restoreElement(backup: MoveBackup): void {
-    backup.element.style.transform = backup.transform;
-    backup.element.style.transformOrigin = backup.transformOrigin;
-    backup.element.style.transition = backup.transition;
-    backup.element.style.position = backup.position;
-    backup.element.style.zIndex = backup.zIndex;
+    const style = backup.element.style;
+    style.transform = backup.transform;
+    style.transformOrigin = backup.transformOrigin;
+    style.transition = backup.transition;
+    style.position = backup.position;
+    style.zIndex = backup.zIndex;
   }
 
   private restoreRearrangedElements(): void {
@@ -1214,222 +1412,217 @@ class NativeAgentation {
     this.rearrangedElements.clear();
   }
 
-  private toggleBlankCanvas(): void {
-    if (!this.blankCanvas) {
-      saveDesignPlacements(this.route, this.placements);
-      saveRearrangeState(this.route, this.rearrange);
-      const wireframe = loadWireframeState<RearrangeState>(this.route);
-      this.placements = (wireframe?.placements as DesignPlacement[] | undefined) ?? [];
-      this.rearrange = wireframe?.rearrange ?? { sections: [], originalOrder: [], detectedAt: Date.now() };
-      this.wireframePurpose = wireframe?.purpose ?? "";
-      this.blankCanvas = true;
-      this.restoreRearrangedElements();
-    } else {
-      saveWireframeState(this.route, {
-        rearrange: this.rearrange,
-        placements: this.placements,
-        purpose: this.wireframePurpose,
-      });
-      this.placements = loadDesignPlacements<DesignPlacement>(this.route);
-      this.rearrange = loadRearrangeState<RearrangeState>(this.route) ?? {
-        sections: [],
-        originalOrder: [],
-        detectedAt: Date.now(),
-      };
-      this.blankCanvas = false;
+  // ===========================================================================
+  // Output
+  // ===========================================================================
+
+  private output(): string {
+    const detail: OutputDetailLevel = this.settings.outputDetail;
+    const viewport = {
+      width: this.environment.innerWidth,
+      height: this.environment.innerHeight,
+    };
+    const chunks: string[] = [];
+
+    // A blank wireframe describes an intended layout, so annotations about the
+    // hidden page content would only be misleading noise.
+    if (!this.wireframe) {
+      const feedback = generateOutput(
+        this.annotations.filter((annotation) => (annotation.kind ?? "feedback") === "feedback"),
+        this.route,
+        detail,
+      );
+      if (feedback) chunks.push(feedback);
     }
+
+    if (this.placements.length > 0) {
+      const design = generateDesignOutput(
+        this.environment,
+        this.placements,
+        viewport,
+        { blankCanvas: this.wireframe, wireframePurpose: this.wireframePurpose },
+        detail,
+      );
+      if (design) chunks.push(design);
+    }
+
+    if (this.rearrange.sections.length > 0) {
+      const moved = generateRearrangeOutput(this.environment, this.rearrange, detail, viewport);
+      if (moved) chunks.push(moved);
+    }
+
+    return chunks.join("\n\n");
   }
 
-  private async initializeSync(): Promise<void> {
-    const generation = ++this.syncGeneration;
-    const endpoint = this.config.endpoint;
-    if (!endpoint) {
-      this.currentSessionId = null;
+  private async copyOutput(submit: boolean): Promise<void> {
+    const output = this.output();
+    if (!output) {
+      this.flash("Nothing to copy");
       return;
     }
-    try {
-      let sessionId = this.config.sessionId ?? loadSessionId(this.route);
-      let remote: Annotation[] = [];
-      if (sessionId) {
-        const session = await getSession(endpoint, sessionId);
-        remote = session.annotations;
-      } else {
-        const session = await createSession(endpoint, this.pathname());
-        sessionId = session.id;
-        saveSessionId(this.route, sessionId);
-        this.config.onSessionCreated?.(sessionId);
-        this.emit({ type: "session-created", sessionId });
+
+    if (submit) {
+      await this.submitOutput(output);
+      return;
+    }
+
+    if (this.config.copyToClipboard !== false) {
+      try {
+        await this.environment.writeClipboardText(output);
+      } catch (cause) {
+        this.emitError("clipboard", "Could not write to the clipboard", true, cause);
+        this.flash("Clipboard unavailable");
+        return;
       }
-      if (generation !== this.syncGeneration || this.destroyed) return;
-      this.currentSessionId = sessionId;
-      const remoteFeedback = remote.filter((annotation) => !annotation.kind || annotation.kind === "feedback");
-      for (const annotation of remote) {
-        if (annotation.kind === "placement" && annotation.placement) {
-          this.placementRemoteIds.set(annotation.id, annotation.id);
-          if (!this.placements.some((placement) => placement.id === annotation.id)) {
-            this.placements.push({
-              id: annotation.id,
-              type: annotation.placement.componentType as ComponentType,
-              x: (annotation.x / 100) * this.window.innerWidth,
-              y: annotation.y,
-              width: annotation.placement.width,
-              height: annotation.placement.height,
-              scrollY: annotation.placement.scrollY,
-              timestamp: annotation.timestamp,
-              text: annotation.placement.text,
-            });
-          }
-        }
-        if (annotation.kind === "rearrange" && annotation.rearrange) {
-          this.rearrangeRemoteIds.set(annotation.id, annotation.id);
-          if (!this.rearrange.sections.some((section) => section.id === annotation.id)) {
-            const change = annotation.rearrange;
-            this.rearrange.sections.push({
-              id: annotation.id,
-              label: change.label,
-              tagName: change.tagName,
-              selector: change.selector,
-              role: null,
-              className: null,
-              textSnippet: null,
-              originalRect: change.originalRect,
-              currentRect: change.currentRect,
-              originalIndex: this.rearrange.sections.length,
-            });
-            this.rearrange.originalOrder.push(annotation.id);
-          }
-        }
-      }
-      const merged = new Map<string, Annotation>();
-      for (const annotation of [...remoteFeedback, ...this.annotations]) merged.set(annotation.id, annotation);
-      this.annotations = [...merged.values()];
-      this.saveRouteState();
-      this.emitAnnotations("remote", remoteFeedback);
-      for (const annotation of this.annotations) {
-        if (remoteFeedback.some((item) => item.id === annotation.id)) continue;
-        void this.syncNewAnnotation(annotation);
-      }
-      for (const placement of this.placements) {
-        if (!this.placementRemoteIds.has(placement.id)) void this.syncPlacement(placement);
-      }
-      for (const section of this.rearrange.sections) {
-        if (!this.rearrangeRemoteIds.has(section.id)) void this.syncRearrangeSection(section);
-      }
+    }
+
+    this.copied = true;
+    this.render();
+    this.freeze.scheduler.clearTimeout(this.copiedTimer);
+    this.copiedTimer = this.freeze.scheduler.setTimeout(() => {
+      this.copied = false;
       this.render();
-    } catch (cause) {
-      if (generation === this.syncGeneration) {
-        this.currentSessionId = null;
-        this.emitError("sync", "Could not initialize Agentation sync; continuing locally", true, cause);
-      }
-    }
+    }, COPIED_MS);
+
+    this.emit({ type: "copy", output, annotations: this.annotations });
+    this.config.onCopy?.(output);
+    if (this.settings.autoClearAfterCopy) void this.clearAll();
   }
 
-  private async syncNewAnnotation(annotation: Annotation): Promise<void> {
-    if (!this.config.endpoint || !this.currentSessionId) return;
-    try {
-      const synced = await syncAnnotation(this.config.endpoint, this.currentSessionId, {
-        ...annotation,
-        sessionId: this.currentSessionId,
-        url: this.pathname(),
-      });
-      if (synced.id !== annotation.id) {
-        this.annotations = this.annotations.map((item) => item.id === annotation.id ? synced : item);
-        this.saveRouteState();
-        this.renderMarkers();
-      }
-    } catch (cause) {
-      this.emitError("sync", "Failed to sync annotation; it remains stored locally", true, cause);
-    }
+  private async submitOutput(output: string): Promise<void> {
+    this.sendState = "sending";
+    this.render();
+
+    const delivered = await this.deliver(output);
+    if (this.destroyed) return;
+
+    this.sendState = delivered ? "sent" : "failed";
+    this.render();
+    this.freeze.scheduler.clearTimeout(this.sendTimer);
+    this.sendTimer = this.freeze.scheduler.setTimeout(() => {
+      this.sendState = "idle";
+      this.render();
+    }, SENT_MS);
+
+    if (delivered && this.settings.autoClearAfterCopy) void this.clearAll();
   }
 
-  private async syncPlacement(placement: DesignPlacement): Promise<void> {
-    if (!this.config.endpoint || !this.currentSessionId) return;
-    const annotation: Annotation = {
-      id: placement.id,
-      x: (placement.x / this.window.innerWidth) * 100,
-      y: placement.y,
-      comment: placement.text || `Add ${placement.type}`,
-      element: `[design:${placement.type}]`,
-      elementPath: "[placement]",
-      timestamp: placement.timestamp,
-      url: this.pathname(),
-      intent: "change",
-      severity: "important",
-      kind: "placement",
-      placement: {
-        componentType: placement.type,
-        width: placement.width,
-        height: placement.height,
-        scrollY: placement.scrollY,
-        text: placement.text,
-      },
-    };
-    try {
-      const remoteId = this.placementRemoteIds.get(placement.id);
-      if (remoteId) {
-        await updateAnnotationOnServer(this.config.endpoint, remoteId, annotation);
-      } else {
-        const synced = await syncAnnotation(this.config.endpoint, this.currentSessionId, annotation);
-        this.placementRemoteIds.set(placement.id, synced.id);
+  /** Submit reaches every configured destination; success means at least one. */
+  private async deliver(output: string): Promise<boolean> {
+    const event = this.emit({ type: "submit", output, annotations: this.annotations }, true);
+    // A consumer calling `preventDefault()` is taking delivery over.
+    if (event.defaultPrevented) return true;
+
+    let delivered = false;
+    if (this.config.onSubmit) {
+      try {
+        this.config.onSubmit(
+          output,
+          this.annotations.map((annotation) => ({ ...annotation })),
+        );
+        delivered = true;
+      } catch (cause) {
+        this.emitError("callback", "onSubmit threw", true, cause);
       }
-    } catch (cause) {
-      this.emitError("sync", "Failed to sync layout placement", true, cause);
     }
+    if (await this.sync.action(output)) delivered = true;
+    if (await this.fireWebhook("submit", { output }, true)) delivered = true;
+    return delivered;
   }
 
-  private async syncRearrangeSection(section: DetectedSection): Promise<void> {
-    if (!this.config.endpoint || !this.currentSessionId) return;
-    const annotation: Annotation = {
-      id: section.id,
-      x: (section.currentRect.x / this.window.innerWidth) * 100,
-      y: section.currentRect.y,
-      comment: section.note || `Rearrange ${section.label}`,
-      element: section.selector,
-      elementPath: "[rearrange]",
-      timestamp: Date.now(),
-      url: this.pathname(),
-      intent: "change",
-      severity: "important",
-      kind: "rearrange",
-      rearrange: {
-        selector: section.selector,
-        label: section.label,
-        tagName: section.tagName,
-        originalRect: section.originalRect,
-        currentRect: section.currentRect,
-      },
-    };
-    try {
-      const remoteId = this.rearrangeRemoteIds.get(section.id);
-      if (remoteId) {
-        await updateAnnotationOnServer(this.config.endpoint, remoteId, annotation);
-      } else {
-        const synced = await syncAnnotation(this.config.endpoint, this.currentSessionId, annotation);
-        this.rearrangeRemoteIds.set(section.id, synced.id);
-      }
-    } catch (cause) {
-      this.emitError("sync", "Failed to sync rearranged section", true, cause);
-    }
-  }
-
-  private async fireWebhook(event: string, payload: Record<string, unknown>, force = false): Promise<boolean> {
+  private async fireWebhook(
+    event: string,
+    payload: Record<string, unknown>,
+    force = false,
+  ): Promise<boolean> {
     const target = this.settings.webhookUrl || this.config.webhookUrl;
-    if (!target || (!this.settings.webhooksEnabled && !force)) return false;
+    if (!target || !validHttpUrl(target)) return false;
+    if (!this.settings.webhooksEnabled && !force) return false;
+
     try {
-      const response = await fetch(target, {
+      const response = await this.environment.fetch(target, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ event, ...payload, url: this.window.location.href, timestamp: Date.now() }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event, url: this.environment.href, ...payload }),
       });
-      if (!response.ok) throw new Error(`Webhook returned ${response.status}`);
+      if (!response.ok) throw new Error(`Webhook responded ${response.status}`);
       return true;
     } catch (cause) {
-      this.emitError("webhook", "Agentation webhook failed", true, cause);
+      this.emitError("webhook", "Webhook delivery failed", true, cause);
       return false;
     }
   }
 
-  private emitAnnotations(reason: Extract<AgentationEventDetail, { type: "annotations" }>["reason"], affected: Annotation[]): void {
+  // ===========================================================================
+  // Demo mode
+  // ===========================================================================
+
+  private scheduleDemo(): void {
+    const demos = this.config.demoAnnotations;
+    if (!demos || demos.length === 0 || this.annotations.length > 0) return;
+
+    this.freeze.scheduler.setTimeout(() => {
+      if (this.destroyed || this.annotations.length > 0) return;
+
+      const added: Annotation[] = [];
+      for (const demo of demos) {
+        const element = this.environment.document.querySelector<HTMLElement>(demo.selector);
+        if (!element) continue;
+        const rect = element.getBoundingClientRect();
+        const target = collectTarget(
+          element,
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+          this.targetContext,
+        );
+        added.push({
+          ...target,
+          id: this.environment.randomId("ann"),
+          comment: demo.comment,
+          selectedText: demo.selectedText,
+          timestamp: this.environment.now(),
+          kind: "feedback",
+        });
+      }
+      if (added.length === 0) return;
+
+      this.annotations = [...this.annotations, ...added];
+      this.active = true;
+      this.applyAccent();
+      this.saveRouteState();
+      this.emitAnnotations("load", added);
+      this.render();
+    }, this.config.demoDelay ?? 1000);
+  }
+
+  // ===========================================================================
+  // Events
+  // ===========================================================================
+
+  private emit(detail: AgentationEventDetail, cancelable = false): AgentationEvent {
+    const event = new this.environment.CustomEvent<AgentationEventDetail>("agentation", {
+      detail,
+      bubbles: true,
+      composed: true,
+      cancelable,
+    });
+    this.host.dispatchEvent(event);
+    try {
+      this.config.onEvent?.(event);
+    } catch (cause) {
+      // A throwing observer must not abort the operation that notified it, and
+      // must not recurse when the notification *was* an error report.
+      if (detail.type !== "error") {
+        this.emitError("callback", "onEvent threw", true, cause);
+      }
+    }
+    return event;
+  }
+
+  private emitAnnotations(
+    reason: Extract<AgentationEventDetail, { type: "annotations" }>["reason"],
+    affected: readonly Annotation[],
+  ): void {
     this.emit({ type: "annotations", reason, current: this.annotations, affected });
   }
 
@@ -1442,344 +1635,190 @@ class NativeAgentation {
     this.emit({ type: "error", operation, message, recoverable, cause });
   }
 
-  private emit(detail: AgentationEventDetail, cancelable = false): AgentationEvent {
-    const event = new this.window.CustomEvent<AgentationEventDetail>("agentation", {
-      detail,
-      bubbles: true,
-      composed: true,
-      cancelable,
-    });
-    this.host.dispatchEvent(event);
-    try {
-      this.config.onEvent?.(event);
-    } catch (cause) {
-      console.error("[Agentation] onEvent callback failed", cause);
-    }
-    return event;
+  private onStorageFailure(failure: StorageFailure): void {
+    this.emitError(
+      "storage",
+      `Could not ${failure.operation} "${failure.key}"; continuing in memory`,
+      true,
+      failure.cause,
+    );
   }
 
   private flash(message: string): void {
-    this.toast.textContent = message;
-    this.toast.hidden = false;
-    if (this.toastTimer !== undefined) this.window.clearTimeout(this.toastTimer);
-    this.toastTimer = this.window.setTimeout(() => {
-      this.toast.hidden = true;
-    }, 1500);
+    this.toast = message;
+    this.render();
+    this.freeze.scheduler.clearTimeout(this.toastTimer);
+    this.toastTimer = this.freeze.scheduler.setTimeout(() => {
+      this.toast = null;
+      this.render();
+    }, TOAST_MS);
   }
 
-  private loadDemoAnnotations(): void {
-    for (const demo of this.config.demoAnnotations ?? []) {
-      const target = this.document.querySelector<HTMLElement>(demo.selector);
-      if (!target) continue;
-      const rect = target.getBoundingClientRect();
-      const annotation: Annotation = {
-        ...this.collectTarget(target, rect.left + rect.width / 2, rect.top + rect.height / 2),
-        id: createId("demo"),
-        comment: demo.comment,
-        selectedText: demo.selectedText,
-        timestamp: Date.now(),
-      };
-      this.annotations.push(annotation);
-    }
-    this.saveRouteState();
-    this.render();
+  // ===========================================================================
+  // Render
+  // ===========================================================================
+
+  private get layoutState(): LayoutViewState {
+    return {
+      active: this.layoutActive,
+      exiting: this.layoutExiting,
+      wireframe: this.wireframe,
+      wireframeReady: this.wireframeReady,
+      wireframeOpacity: this.wireframeOpacity,
+      wireframePurpose: this.wireframePurpose,
+      activeComponent: this.activeComponent,
+      placements: this.placements,
+      rearrange: this.rearrange,
+      interacting: this.layoutInteracting,
+    };
   }
 
   private render(): void {
     if (this.destroyed) return;
-    this.applyAccent();
-    this.renderToolbar();
-    this.renderPanel();
-    this.renderPopup();
-    this.renderHover();
-    this.renderSelection();
-    this.renderMarkers();
-    this.renderOverlays();
-    this.resizeCanvas();
-    this.redrawCanvas();
-  }
+    this.host.hidden = this.hidden && !this.hiding;
 
-  private applyAccent(): void {
-    this.host.style.setProperty("--ag-accent", COLOR_VALUES[this.settings.annotationColorId]);
-  }
+    const model: RuntimeViewModel = {
+      active: this.active,
+      hidden: this.hidden,
+      hiding: this.hiding,
+      entrance: this.entrance,
+      theme: this.theme,
+      settings: this.settings,
+      toolbarPosition: this.toolbarPosition,
+      // `moved`, not merely "a pointer is down": the toolbar region reads this
+      // on `pointerup` to decide whether to swallow the synthesized click, so a
+      // stationary press on the collapsed circle must still activate.
+      dragging: this.toolbarDrag?.moved === true,
+      settingsOpen: this.settingsOpen,
+      settingsPage: this.settingsPage,
+      tooltipsHidden: this.tooltipsHidden,
+      tooltipSession: this.tooltipSession,
+      annotations: this.annotations,
+      exitingAnnotationIds: this.exitingAnnotationIds,
+      animatedAnnotationIds: this.animatedAnnotationIds,
+      renumberFrom: this.renumberFrom,
+      editor: this.editor,
+      markersVisible: this.markersVisible,
+      markersExiting: this.markersExiting,
+      hover: this.hover,
+      hoveredAnnotationId: this.hoveredAnnotationId,
+      outlines: this.outlines,
+      dragSelection: this.dragSelection,
+      dragHighlights: this.dragHighlights,
+      scrolling: this.scrolling,
+      frozen: this.freeze.frozen,
+      layout: this.layoutState,
+      hasEndpoint: Boolean(this.config.endpoint),
+      connection: this.connection,
+      sendState: this.sendState,
+      copied: this.copied,
+      metadataAdapterIds: (this.config.metadata ?? []).map((adapter) => adapter.id),
+      toast: this.toast,
+    };
 
-  private renderToolbar(): void {
-    if (!this.active) {
-      this.toolbar.innerHTML = `<button class="ag-btn" data-action="toggle-active" aria-label="Open Agentation">Annotate</button>`;
-      return;
-    }
-    const count = this.annotations.length + this.placements.length + this.rearrange.sections.length;
-    this.toolbar.innerHTML = `
-      <button class="ag-btn" data-action="toggle-active" aria-label="Close Agentation">×</button>
-      <span class="ag-count">${count}</span>
-      <span class="ag-divider"></span>
-      <button class="ag-btn" data-action="toggle-markers" aria-pressed="${this.showMarkers}">Markers</button>
-      <button class="ag-btn" data-action="toggle-draw" aria-pressed="${this.drawMode}">Draw</button>
-      <button class="ag-btn" data-action="toggle-layout" aria-pressed="${this.designMode}">Layout</button>
-      <button class="ag-btn" data-action="toggle-freeze" aria-pressed="${this.frozen}">Pause</button>
-      <span class="ag-divider"></span>
-      <button class="ag-btn" data-action="copy">Copy</button>
-      ${this.config.endpoint ? `<button class="ag-btn" data-action="submit">Send</button>` : ""}
-      <button class="ag-btn ag-btn-danger" data-action="clear">Clear</button>
-      <button class="ag-btn" data-action="settings" aria-pressed="${this.panelMode === "settings"}">Settings</button>
-    `;
-  }
-
-  private renderPanel(): void {
-    if (!this.active || !this.panelMode) {
-      this.panel.hidden = true;
-      this.panel.innerHTML = "";
-      return;
-    }
-    this.panel.hidden = false;
-    if (this.panelMode === "settings") {
-      this.panel.innerHTML = `
-        <div class="ag-popup-title">Agentation settings</div>
-        <label class="ag-field">Output detail
-          <select data-setting="outputDetail">
-            ${(["compact", "standard", "detailed", "forensic"] as const).map((value) => `<option value="${value}" ${this.settings.outputDetail === value ? "selected" : ""}>${value}</option>`).join("")}
-          </select>
-        </label>
-        <label class="ag-field">Annotation color
-          <select data-setting="annotationColorId">
-            ${Object.keys(COLOR_VALUES).map((value) => `<option value="${value}" ${this.settings.annotationColorId === value ? "selected" : ""}>${value}</option>`).join("")}
-          </select>
-        </label>
-        <label class="ag-check"><input type="checkbox" data-setting="blockInteractions" ${this.settings.blockInteractions ? "checked" : ""}> Block page interactions while annotating</label>
-        <label class="ag-check"><input type="checkbox" data-setting="metadataEnabled" ${this.settings.metadataEnabled ? "checked" : ""}> Collect framework metadata</label>
-        <label class="ag-check"><input type="checkbox" data-setting="autoClearAfterCopy" ${this.settings.autoClearAfterCopy ? "checked" : ""}> Clear after copy/send</label>
-        <label class="ag-field">Marker click
-          <select data-setting="markerClickBehavior">
-            <option value="edit" ${this.settings.markerClickBehavior === "edit" ? "selected" : ""}>Edit</option>
-            <option value="delete" ${this.settings.markerClickBehavior === "delete" ? "selected" : ""}>Delete</option>
-          </select>
-        </label>
-        <label class="ag-field">Webhook URL
-          <input data-field="webhook-url" value="${escapeHtml(this.settings.webhookUrl)}" placeholder="https://…">
-        </label>
-        <label class="ag-check"><input type="checkbox" data-setting="webhooksEnabled" ${this.settings.webhooksEnabled ? "checked" : ""}> Enable webhooks</label>
-        <div class="ag-actions"><button class="ag-btn" data-action="close-panel">Done</button></div>
-      `;
-      return;
-    }
-
-    this.panel.innerHTML = `
-      <div class="ag-popup-title">Layout mode — select a component to place, or click a page section to rearrange</div>
-      <label class="ag-check"><input type="checkbox" data-action="toggle-blank" ${this.blankCanvas ? "checked" : ""}> Blank wireframe canvas</label>
-      ${this.blankCanvas ? `<input class="ag-purpose" data-field="wireframe-purpose" value="${escapeHtml(this.wireframePurpose)}" placeholder="What is this page for?">` : ""}
-      ${COMPONENT_REGISTRY.map((section) => `
-        <div class="ag-section-title">${escapeHtml(section.section)}</div>
-        <div class="ag-grid">${section.items.map((item) => `<button class="ag-chip" data-action="select-component" data-component="${item.type}" data-active="${this.activeComponent === item.type}">${escapeHtml(item.label)}</button>`).join("")}</div>
-      `).join("")}
-      <div class="ag-actions"><button class="ag-btn" data-action="close-panel">Hide palette</button></div>
-    `;
-  }
-
-  private renderPopup(): void {
-    if (!this.pending) {
-      this.popup.hidden = true;
-      this.popup.innerHTML = "";
-      return;
-    }
-    const width = 360;
-    const left = Math.max(12, Math.min(this.window.innerWidth - width - 12, this.pending.clientX + 14));
-    const top = Math.max(12, Math.min(this.window.innerHeight - 190, this.pending.clientY + 14));
-    this.popup.style.left = `${left}px`;
-    this.popup.style.top = `${top}px`;
-    this.popup.hidden = false;
-    const label = this.pending.annotation?.element ?? this.pending.target?.element ?? "Annotation";
-    const source = this.pending.annotation ? sourceString(this.pending.annotation) : undefined;
-    this.popup.innerHTML = `
-      <div class="ag-popup-title">${escapeHtml(label)}${source ? ` · ${escapeHtml(source)}` : ""}</div>
-      <textarea data-field="comment" placeholder="What should change?">${escapeHtml(this.pending.draft)}</textarea>
-      <div class="ag-actions">
-        ${this.pending.mode === "edit" ? `<button class="ag-btn ag-btn-danger" data-action="delete-popup">Delete</button>` : ""}
-        <button class="ag-btn" data-action="cancel-popup">Cancel</button>
-        <button class="ag-btn" data-action="save-popup">${this.pending.mode === "edit" ? "Save" : "Add"}</button>
-      </div>
-    `;
-  }
-
-  private renderHover(): void {
-    if (!this.active || !this.hoverTarget || !this.hoverRect || this.pending || this.drawMode || this.designMode) {
-      this.hoverLayer.innerHTML = "";
-      return;
-    }
-    const info = identifyElement(this.hoverTarget);
-    this.hoverLayer.innerHTML = `<div class="ag-hover" style="left:${this.hoverRect.left}px;top:${this.hoverRect.top}px;width:${this.hoverRect.width}px;height:${this.hoverRect.height}px"><span class="ag-hover-label">${escapeHtml(info.name)}</span></div>`;
-  }
-
-  private renderSelection(): void {
-    if (!this.selectionStart || !this.selectionCurrent) {
-      this.selectionLayer.innerHTML = "";
-      return;
-    }
-    const left = Math.min(this.selectionStart.x, this.selectionCurrent.x);
-    const top = Math.min(this.selectionStart.y, this.selectionCurrent.y);
-    const width = Math.abs(this.selectionStart.x - this.selectionCurrent.x);
-    const height = Math.abs(this.selectionStart.y - this.selectionCurrent.y);
-    this.selectionLayer.innerHTML = `<div class="ag-selection-rect" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px"></div>`;
-  }
-
-  private renderMarkers(): void {
-    if (!this.active || !this.showMarkers || this.designMode) {
-      this.markerLayer.innerHTML = "";
-      return;
-    }
-    this.markerLayer.innerHTML = this.annotations.map((annotation, index) => {
-      const left = (annotation.x / 100) * this.window.innerWidth;
-      const top = annotation.isFixed ? annotation.y : annotation.y - this.window.scrollY;
-      return `<button class="ag-marker" data-action="marker" data-id="${escapeHtml(annotation.id)}" style="left:${left}px;top:${top}px" aria-label="Annotation ${index + 1}: ${escapeHtml(annotation.comment)}">${index + 1}</button>`;
-    }).join("");
-  }
-
-  private renderOverlays(): void {
-    this.blankLayer.hidden = !(this.active && this.designMode && this.blankCanvas);
-    if (!this.active || !this.designMode) {
-      this.overlayLayer.innerHTML = "";
-      return;
-    }
-    this.applyRearrangedElements();
-    const placements = this.placements.map((placement) => `
-      <div class="ag-placement" data-overlay-kind="placement" data-id="${escapeHtml(placement.id)}" style="left:${placement.x}px;top:${placement.y - this.window.scrollY}px;width:${placement.width}px;height:${placement.height}px">
-        <span class="ag-placement-label">${escapeHtml(placement.type)}</span>
-        <button class="ag-delete" data-action="delete-placement" data-id="${escapeHtml(placement.id)}" aria-label="Delete placement">×</button>
-        <span class="ag-resize" data-resize></span>
-      </div>
-    `).join("");
-    const sections = this.blankCanvas ? "" : this.rearrange.sections.map((section) => `
-      <div class="ag-rearrange" data-overlay-kind="rearrange" data-id="${escapeHtml(section.id)}" style="left:${section.currentRect.x}px;top:${section.currentRect.y - this.window.scrollY}px;width:${section.currentRect.width}px;height:${section.currentRect.height}px">
-        <span class="ag-rearrange-label">${escapeHtml(section.label)}</span>
-        <button class="ag-delete" data-action="delete-rearrange" data-id="${escapeHtml(section.id)}" aria-label="Remove section">×</button>
-        <span class="ag-resize" data-resize></span>
-      </div>
-    `).join("");
-    this.overlayLayer.innerHTML = placements + sections;
-  }
-
-  private renderPositions(): void {
-    this.renderMarkers();
-    this.renderOverlays();
-    this.redrawCanvas();
-  }
-
-  private resizeCanvas(): void {
-    const ratio = this.window.devicePixelRatio || 1;
-    const width = Math.round(this.window.innerWidth * ratio);
-    const height = Math.round(this.window.innerHeight * ratio);
-    if (this.canvas.width !== width || this.canvas.height !== height) {
-      this.canvas.width = width;
-      this.canvas.height = height;
-      this.canvas.style.width = `${this.window.innerWidth}px`;
-      this.canvas.style.height = `${this.window.innerHeight}px`;
-    }
-    this.canvas.hidden = !this.active || (!this.drawMode && this.drawStrokes.length === 0);
-    this.canvas.dataset.passive = String(!this.drawMode);
-  }
-
-  private redrawCanvas(): void {
-    const context = this.canvas.getContext("2d");
-    if (!context) return;
-    const ratio = this.window.devicePixelRatio || 1;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, this.window.innerWidth, this.window.innerHeight);
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = 4;
-    for (const stroke of this.drawStrokes) {
-      if (stroke.points.length < 2) continue;
-      context.strokeStyle = stroke.color;
-      context.beginPath();
-      context.moveTo(stroke.points[0].x, stroke.points[0].y - this.window.scrollY);
-      for (const point of stroke.points.slice(1)) context.lineTo(point.x, point.y - this.window.scrollY);
-      context.stroke();
-    }
+    this.view.update(model, this.config);
   }
 }
 
-export function defineAgentationElement(realm?: Window): CustomElementConstructor | undefined {
-  const target = realm ?? (typeof window !== "undefined" ? window : undefined);
-  if (!target) return undefined;
-  const existing = target.customElements.get(TAG_NAME);
-  if (existing) return existing;
-  const HTMLElementBase = (target as Window & typeof globalThis).HTMLElement;
+// =============================================================================
+// Custom element
+// =============================================================================
 
-  class NativeAgentationElement extends HTMLElementBase implements AgentationElement {
-    private runtime?: NativeAgentation;
-    private nextConfig: AgentationConfig = {};
+export function defineAgentationElement(realm?: Window): CustomElementConstructor | undefined {
+  const view = realm ?? (typeof window === "undefined" ? undefined : window);
+  if (!view?.customElements) return undefined;
+
+  const existing = view.customElements.get(TAG_NAME);
+  if (existing) return existing;
+
+  // The element must extend the *realm's* `HTMLElement`, not the ambient one:
+  // a document inside an iframe has its own constructor, and `customElements`
+  // rejects a class whose prototype chain belongs to another realm. `Window`
+  // does not declare its DOM constructors, hence the cast.
+  const HTMLElementCtor = (view as unknown as { HTMLElement: typeof HTMLElement })
+    .HTMLElement;
+
+  class AgentationOverlay extends HTMLElementCtor implements AgentationElement {
+    #config: AgentationConfig = {};
+    #runtime: NativeAgentation | undefined;
+    #failure: string | undefined;
 
     get config(): AgentationConfig {
-      return { ...this.nextConfig };
+      return this.#config;
     }
 
-    set config(value: AgentationConfig) {
-      this.nextConfig = { ...(value ?? {}) };
-      this.runtime?.configure(this.nextConfig);
+    set config(next: AgentationConfig) {
+      this.#config = next;
+      this.#runtime?.configure(next);
     }
 
     connectedCallback(): void {
-      if (this.runtime) return;
-      if (Object.prototype.hasOwnProperty.call(this, "config")) {
-        const preUpgradeConfig = (this as AgentationElement).config;
-        delete (this as unknown as Record<string, unknown>).config;
-        this.config = preUpgradeConfig;
-      }
+      if (this.#runtime) return;
       const document = this.ownerDocument;
-      const mounted = instances.get(document);
-      if (mounted) throw new Error("Only one Agentation instance may be mounted per document");
-      this.runtime = new NativeAgentation(this, this.nextConfig);
-      instances.set(document, this.runtime);
+      if (instances.has(document)) {
+        // Custom element reactions must not throw: the spec reports the error
+        // instead of propagating it, so a throw here would surface as an
+        // unhandled exception while `append()` appeared to succeed. The reason
+        // is recorded for `mountAgentation` to raise at its own call site.
+        this.#failure = "Only one Agentation instance per document is supported";
+        console.warn(`[Agentation] ${this.#failure}`);
+        return;
+      }
+      this.#failure = undefined;
+      this.#runtime = new NativeAgentation(this, this.#config);
+      instances.set(document, this.#runtime);
     }
 
     disconnectedCallback(): void {
-      this.runtime?.destroy();
-      this.runtime = undefined;
+      this.#runtime?.destroy();
+      this.#runtime = undefined;
     }
 
     getRuntime(): NativeAgentation | undefined {
-      return this.runtime;
+      return this.#runtime;
+    }
+
+    getFailure(): string | undefined {
+      return this.#failure;
     }
   }
 
-  target.customElements.define(TAG_NAME, NativeAgentationElement);
-  return NativeAgentationElement;
+  view.customElements.define(TAG_NAME, AgentationOverlay);
+  return view.customElements.get(TAG_NAME);
 }
 
 export function mountAgentation(
   document: Document,
   config: AgentationConfig = {},
 ): AgentationController {
-  if (!document.defaultView || !document.body) {
-    throw new Error("mountAgentation requires a browser Document with a body");
-  }
-  if (instances.has(document)) {
-    throw new Error("Only one Agentation instance may be mounted per document");
-  }
-  defineAgentationElement(document.defaultView);
+  defineAgentationElement(document.defaultView ?? undefined);
+
   const element = document.createElement(TAG_NAME) as AgentationElement & {
     getRuntime?: () => NativeAgentation | undefined;
+    getFailure?: () => string | undefined;
   };
   element.config = config;
   document.body.append(element);
+
   const runtime = element.getRuntime?.();
   if (!runtime) {
     element.remove();
-    throw new Error("Agentation failed to initialize");
+    throw new Error(element.getFailure?.() ?? "Agentation failed to initialize");
   }
+
   let destroyed = false;
   return {
     element,
-    configure(next) {
+    configure(next: AgentationConfig): void {
       if (destroyed) throw new Error("Agentation controller has been destroyed");
       element.config = next;
     },
-    getAnnotations() {
-      return runtime.getAnnotations();
+    getAnnotations(): readonly Annotation[] {
+      return destroyed ? [] : runtime.getAnnotations();
     },
-    destroy() {
+    destroy(): void {
       if (destroyed) return;
       destroyed = true;
-      runtime.destroy();
       element.remove();
     },
   };

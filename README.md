@@ -40,6 +40,7 @@ The same custom-element runtime is available through:
 - `agentation/solid` — Solid lifecycle wrapper
 - `agentation/solid/vite` — optional Solid source-location instrumentation
 - `agentation/browser` — imperative mount and custom-element registration
+- `agentation/react/ui` — React-only presentational helpers (`AnnotationPopupCSS`, the icon set)
 
 See the [package README](package/README.md#solidjs--solidstart) for setup.
 

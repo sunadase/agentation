@@ -32,3 +32,8 @@ tsup.config.bundled_*.mjs
 # npm pack output
 *.tgz
 BRANCH_NOTES.md
+
+# Playwright E2E output (snapshots under e2e/specs/__snapshots__ are committed)
+e2e/test-results/
+e2e/results.json
+playwright-report/

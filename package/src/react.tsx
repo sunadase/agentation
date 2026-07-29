@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
 import { mountAgentation } from "./browser/runtime";
-import type { AgentationConfig, AgentationController } from "./browser/types";
+import type {
+  AgentationConfig,
+  AgentationController,
+  ElementMetadataAdapter,
+} from "./browser/types";
 import { createReactMetadataAdapter } from "./metadata/react";
 
 export type AgentationProps = AgentationConfig;
@@ -9,9 +13,12 @@ export type DemoAnnotation = NonNullable<AgentationConfig["demoAnnotations"]>[nu
 export function Agentation(props: AgentationProps = {}): null {
   const controllerRef = useRef<AgentationController>();
   const latestRef = useRef<AgentationConfig>(props);
+  // One default adapter per component instance; a render must not churn it.
+  const defaultMetadataRef = useRef<readonly ElementMetadataAdapter[]>();
   latestRef.current = {
     ...props,
-    metadata: props.metadata ?? [createReactMetadataAdapter()],
+    metadata:
+      props.metadata ?? (defaultMetadataRef.current ??= [createReactMetadataAdapter()]),
   };
 
   useEffect(() => {

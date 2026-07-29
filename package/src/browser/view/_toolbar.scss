@@ -1,0 +1,718 @@
+// =============================================================================
+// Toolbar
+// =============================================================================
+//
+// A direct translation of the original `.toolbar` / `.toolbarContainer` block of
+// `components/page-toolbar-css/styles.module.scss`. Every dimension, duration
+// and easing curve is copied so the frozen visual snapshots still match.
+//
+// Literal neutrals (#1a1a1a, #fff, rgba(255,255,255,…)) stay literal because the
+// original used literals there and the surface tokens carry slightly different
+// values (#1c1c1e); accents keep reading `--agentation-color-*`, exactly as the
+// original did. The host-page CSS resets the original needed are gone: inside a
+// shadow root nothing leaks in.
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Keyframes
+// -----------------------------------------------------------------------------
+
+@keyframes ag-toolbar-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.5) rotate(90deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes ag-toolbar-hide {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes ag-toolbar-badge-enter {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ag-toolbar-mcp-pulse-connected {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--agentation-color-green) 50%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px
+      color-mix(in srgb, var(--agentation-color-green) 0%, transparent);
+  }
+}
+
+@keyframes ag-toolbar-mcp-pulse-connecting {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0
+      color-mix(in srgb, var(--agentation-color-yellow) 50%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px
+      color-mix(in srgb, var(--agentation-color-yellow) 0%, transparent);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Positioned wrapper
+// -----------------------------------------------------------------------------
+
+// Placement is variable-driven: a consumer class on the host
+// (`.my-agentation { --agentation-toolbar-top: 1rem }`) wins without any
+// specificity games, and a dragged inline position wins over both.
+.ag-toolbar {
+  position: fixed;
+  top: var(--agentation-toolbar-top, auto);
+  right: var(--agentation-toolbar-right, 1.25rem);
+  bottom: var(--agentation-toolbar-bottom, 1.25rem);
+  left: var(--agentation-toolbar-left, auto);
+  width: 337px;
+  z-index: var(--agentation-z-index, 100000);
+  font-family: var(--agentation-font);
+  pointer-events: none;
+  // Instant positioning changes while dragging.
+  transition:
+    left 0s,
+    top 0s,
+    right 0s,
+    bottom 0s;
+}
+
+.ag-toolbar,
+.ag-toolbar *,
+.ag-toolbar *::before,
+.ag-toolbar *::after {
+  box-sizing: border-box;
+}
+
+// `hidden` has to beat this region's own layout declarations, as in every other
+// region. Without it the count badges declare `display: flex` and win over the
+// UA sheet, so a zero-annotation route rendered a visible "0" badge on the
+// collapsed circle — the original conditionally rendered the badge instead.
+.ag-toolbar [hidden] {
+  display: none;
+}
+
+.ag-toolbar button {
+  font: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+// -----------------------------------------------------------------------------
+// Morphing container
+// -----------------------------------------------------------------------------
+
+.ag-toolbar-container {
+  position: relative;
+  user-select: none;
+  // Right-aligns the container inside the 337px wrapper at every width.
+  margin-left: auto;
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1a1a1a;
+  color: #fff;
+  border: none;
+  // The legacy CSS module declared no `box-sizing` reset on `.toolbarContainer`,
+  // so its `padding: 0.375rem` rendered OUTSIDE the declared width/height. The
+  // 297/337/44 numbers below are the oracle's *content* box; under the
+  // `.ag-toolbar *` border-box reset they would be absorbed and the pill would
+  // come out 12px narrower and shorter than the original.
+  box-sizing: content-box;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    0 4px 16px rgba(0, 0, 0, 0.1);
+  pointer-events: auto;
+  transition:
+    width 0.4s cubic-bezier(0.19, 1, 0.22, 1),
+    transform 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+
+  &.is-entrance {
+    animation: ag-toolbar-enter 0.5s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
+  }
+
+  &.is-hiding {
+    animation: ag-toolbar-hide 0.4s cubic-bezier(0.4, 0, 1, 1) forwards;
+    pointer-events: none;
+  }
+
+  &.is-collapsed {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    padding: 0;
+    cursor: pointer;
+
+    svg {
+      margin-top: -1px;
+    }
+
+    &:hover {
+      background: #2a2a2a;
+    }
+
+    &:active {
+      transform: scale(0.95);
+    }
+  }
+
+  &.is-expanded {
+    height: 44px;
+    border-radius: 1.5rem;
+    padding: 0.375rem;
+    width: 297px;
+
+    // Send occupies its slot only when a destination exists.
+    &.is-send-available {
+      width: 337px;
+    }
+  }
+}
+
+.ag-toolbar-toggle-content {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.1s cubic-bezier(0.19, 1, 0.22, 1);
+
+  &.is-visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  &.is-hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+.ag-toolbar-controls-content {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  transition:
+    filter 0.8s cubic-bezier(0.19, 1, 0.22, 1),
+    opacity 0.8s cubic-bezier(0.19, 1, 0.22, 1),
+    transform 0.6s cubic-bezier(0.19, 1, 0.22, 1);
+
+  &.is-visible {
+    opacity: 1;
+    filter: blur(0px);
+    transform: scale(1);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  &.is-hidden {
+    pointer-events: none;
+    opacity: 0;
+    filter: blur(10px);
+    transform: scale(0.4);
+
+    // `pointer-events: none` on an ancestor does not win against a descendant
+    // that sets `auto` — and `.ag-toolbar-send.is-send-visible` does exactly
+    // that as soon as a submit destination is configured. Collapsed, that
+    // invisible Send button lands on top of the 44x44 circle and eats the click
+    // that should activate feedback mode, so the whole row is suppressed here.
+    * {
+      pointer-events: none;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Collapsed count badge
+// -----------------------------------------------------------------------------
+
+.ag-toolbar-badge {
+  position: absolute;
+  top: -13px;
+  right: -13px;
+  user-select: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background-color: var(--agentation-color-accent);
+  color: white;
+  font-size: 0.625rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.15),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  opacity: 1;
+  transition:
+    transform 0.3s ease,
+    opacity 0.2s ease;
+  transform: scale(1);
+
+  &.is-fade-out {
+    opacity: 0;
+    transform: scale(0);
+    pointer-events: none;
+  }
+
+  &.is-entrance {
+    animation: ag-toolbar-badge-enter 0.3s cubic-bezier(0.34, 1.2, 0.64, 1) 0.4s
+      both;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Control buttons
+// -----------------------------------------------------------------------------
+
+.ag-toolbar-control-button {
+  position: relative;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease,
+    opacity 0.2s ease;
+
+  &:hover:not(:disabled):not([data-active="true"]):not([data-failed="true"]):not(
+      [data-auto-sync="true"]
+    ):not([data-error="true"]):not([data-no-hover="true"]) {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.92);
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  &[data-active="true"] {
+    color: var(--agentation-color-blue);
+    background-color: color-mix(
+      in srgb,
+      var(--agentation-color-blue) 25%,
+      transparent
+    );
+  }
+
+  &[data-error="true"] {
+    color: var(--agentation-color-red);
+    background-color: color-mix(
+      in srgb,
+      var(--agentation-color-red) 25%,
+      transparent
+    );
+  }
+
+  &[data-danger]:hover:not(:disabled):not([data-active="true"]):not(
+      [data-failed="true"]
+    ) {
+    background-color: color-mix(
+      in srgb,
+      var(--agentation-color-red) 25%,
+      transparent
+    );
+    color: var(--agentation-color-red);
+  }
+
+  &[data-no-hover="true"],
+  &.ag-toolbar-status-showing {
+    cursor: default;
+    pointer-events: none;
+    background: transparent !important;
+  }
+
+  &[data-failed="true"] {
+    color: var(--agentation-color-red);
+    background-color: color-mix(
+      in srgb,
+      var(--agentation-color-red) 25%,
+      transparent
+    );
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--agentation-color-accent);
+    outline-offset: 2px;
+  }
+}
+
+.ag-toolbar-button-badge {
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background-color: var(--agentation-color-accent);
+  color: white;
+  font-size: 0.625rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 0 0 2px #1a1a1a,
+    0 1px 3px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+}
+
+// -----------------------------------------------------------------------------
+// MCP connection indicator
+// -----------------------------------------------------------------------------
+
+// The original mounted the dot conditionally; here it is retained and hidden,
+// so the base state must also stop the pulse animation.
+.ag-toolbar-mcp-indicator {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  pointer-events: none;
+  transition:
+    background-color 0.3s ease,
+    opacity 0.15s ease,
+    transform 0.15s ease;
+  opacity: 0;
+  transform: scale(0);
+  animation: none;
+
+  &.is-connected {
+    background-color: var(--agentation-color-green);
+  }
+
+  &.is-connecting {
+    background-color: var(--agentation-color-yellow);
+  }
+
+  &.is-visible {
+    opacity: 1;
+    transform: scale(1);
+
+    &.is-connected {
+      animation: ag-toolbar-mcp-pulse-connected 2.5s ease-in-out infinite;
+    }
+
+    &.is-connecting {
+      animation: ag-toolbar-mcp-pulse-connecting 1.5s ease-in-out infinite;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Tooltips
+// -----------------------------------------------------------------------------
+
+.ag-toolbar-button-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:hover .ag-toolbar-button-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) scale(1);
+    transition-delay: 0.85s;
+  }
+
+  &:has(.ag-toolbar-control-button:disabled):hover
+    .ag-toolbar-button-tooltip {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+.ag-toolbar-tooltips-in-session
+  .ag-toolbar-button-wrapper:hover
+  .ag-toolbar-button-tooltip {
+  transition-delay: 0s;
+}
+
+.ag-toolbar-send {
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  margin-left: -0.375rem;
+  transition:
+    width 0.4s cubic-bezier(0.19, 1, 0.22, 1),
+    opacity 0.3s cubic-bezier(0.19, 1, 0.22, 1),
+    margin 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+
+  .ag-toolbar-control-button {
+    transform: scale(0.8);
+    transition: transform 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+  }
+
+  &.is-send-visible {
+    width: 34px;
+    opacity: 1;
+    overflow: visible;
+    pointer-events: auto;
+    margin-left: 0;
+
+    .ag-toolbar-control-button {
+      transform: scale(1);
+    }
+  }
+}
+
+.ag-toolbar-button-tooltip {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.95);
+  padding: 6px 10px;
+  background: #1a1a1a;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 8px;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 100001;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition:
+    opacity 0.135s ease,
+    transform 0.135s ease,
+    visibility 0.135s ease;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: calc(100% - 4px);
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 8px;
+    height: 8px;
+    background: #1a1a1a;
+    border-radius: 0 0 2px 0;
+  }
+}
+
+.ag-toolbar-shortcut {
+  margin-left: 4px;
+  opacity: 0.5;
+}
+
+.ag-toolbar-tooltip-below .ag-toolbar-button-tooltip {
+  bottom: auto;
+  top: calc(100% + 14px);
+  transform: translateX(-50%) scale(0.95);
+
+  &::after {
+    top: calc(-4px);
+    bottom: auto;
+    border-radius: 2px 0 0 0;
+  }
+}
+
+.ag-toolbar-tooltip-below
+  .ag-toolbar-button-wrapper:hover
+  .ag-toolbar-button-tooltip {
+  transform: translateX(-50%) scale(1);
+}
+
+.ag-toolbar-tooltips-hidden .ag-toolbar-button-tooltip {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  transition: none !important;
+}
+
+.ag-toolbar-button-wrapper-align-left {
+  .ag-toolbar-button-tooltip {
+    left: 50%;
+    transform: translateX(-12px) scale(0.95);
+
+    &::after {
+      left: 16px;
+    }
+  }
+
+  &:hover .ag-toolbar-button-tooltip {
+    transform: translateX(-12px) scale(1);
+  }
+}
+
+.ag-toolbar-tooltip-below .ag-toolbar-button-wrapper-align-left {
+  .ag-toolbar-button-tooltip {
+    transform: translateX(-12px) scale(0.95);
+  }
+
+  &:hover .ag-toolbar-button-tooltip {
+    transform: translateX(-12px) scale(1);
+  }
+}
+
+.ag-toolbar-button-wrapper-align-right {
+  .ag-toolbar-button-tooltip {
+    left: 50%;
+    transform: translateX(calc(-100% + 12px)) scale(0.95);
+
+    &::after {
+      left: auto;
+      right: 8px;
+    }
+  }
+
+  &:hover .ag-toolbar-button-tooltip {
+    transform: translateX(calc(-100% + 12px)) scale(1);
+  }
+}
+
+.ag-toolbar-tooltip-below .ag-toolbar-button-wrapper-align-right {
+  .ag-toolbar-button-tooltip {
+    transform: translateX(calc(-100% + 12px)) scale(0.95);
+  }
+
+  &:hover .ag-toolbar-button-tooltip {
+    transform: translateX(calc(-100% + 12px)) scale(1);
+  }
+}
+
+.ag-toolbar-divider {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 0.125rem;
+}
+
+// -----------------------------------------------------------------------------
+// Light theme
+// -----------------------------------------------------------------------------
+
+:host([data-agentation-theme="light"]) {
+  .ag-toolbar-container {
+    background: #fff;
+    color: rgba(0, 0, 0, 0.85);
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.08),
+      0 4px 16px rgba(0, 0, 0, 0.06),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+
+    &.is-collapsed:hover {
+      background: #f5f5f5;
+    }
+  }
+
+  .ag-toolbar-button-badge {
+    box-shadow:
+      0 0 0 2px #fff,
+      0 1px 3px rgba(0, 0, 0, 0.2);
+  }
+
+  .ag-toolbar-control-button {
+    color: rgba(0, 0, 0, 0.5);
+
+    &:hover:not(:disabled):not([data-active="true"]):not(
+        [data-failed="true"]
+      ):not([data-auto-sync="true"]):not([data-error="true"]):not(
+        [data-no-hover="true"]
+      ) {
+      background: rgba(0, 0, 0, 0.06);
+      color: rgba(0, 0, 0, 0.85);
+    }
+
+    &[data-active="true"] {
+      color: var(--agentation-color-blue);
+      background: color-mix(
+        in srgb,
+        var(--agentation-color-blue) 15%,
+        transparent
+      );
+    }
+
+    &[data-error="true"] {
+      color: var(--agentation-color-red);
+      background: color-mix(
+        in srgb,
+        var(--agentation-color-red) 15%,
+        transparent
+      );
+    }
+
+    &[data-danger]:hover:not(:disabled):not([data-active="true"]):not(
+        [data-failed="true"]
+      ) {
+      color: var(--agentation-color-red);
+      background: color-mix(
+        in srgb,
+        var(--agentation-color-red) 15%,
+        transparent
+      );
+    }
+
+    &[data-failed="true"] {
+      color: var(--agentation-color-red);
+      background: color-mix(
+        in srgb,
+        var(--agentation-color-red) 15%,
+        transparent
+      );
+    }
+  }
+
+  .ag-toolbar-button-tooltip {
+    background: #fff;
+    color: rgba(0, 0, 0, 0.85);
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.08),
+      0 4px 16px rgba(0, 0, 0, 0.06),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+
+    &::after {
+      background: #fff;
+    }
+  }
+
+  .ag-toolbar-divider {
+    background: rgba(0, 0, 0, 0.1);
+  }
+}

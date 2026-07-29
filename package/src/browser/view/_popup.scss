@@ -1,0 +1,424 @@
+// =============================================================================
+// Annotation popup
+// =============================================================================
+//
+// Port of `components/annotation-popup-css/styles.module.scss`. Dimensions,
+// durations and easing curves are copied verbatim so the frozen parity
+// screenshots still match. The single accent knob the original passed as an
+// inline `accentColor` is now the `--ag-popup-accent` custom property.
+// =============================================================================
+
+@keyframes ag-popup-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.95) translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+}
+
+@keyframes ag-popup-exit {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.95) translateY(4px);
+  }
+}
+
+@keyframes ag-popup-shake {
+  0%,
+  100% {
+    transform: translateX(-50%) scale(1) translateY(0) translateX(0);
+  }
+
+  20% {
+    transform: translateX(-50%) scale(1) translateY(0) translateX(-3px);
+  }
+
+  40% {
+    transform: translateX(-50%) scale(1) translateY(0) translateX(3px);
+  }
+
+  60% {
+    transform: translateX(-50%) scale(1) translateY(0) translateX(-2px);
+  }
+
+  80% {
+    transform: translateX(-50%) scale(1) translateY(0) translateX(2px);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Container
+// -----------------------------------------------------------------------------
+
+.ag-popup {
+  // The popup is the only layer that must sit above the toolbar (the original
+  // used a literal 100001 against the toolbar's 100000).
+  position: fixed;
+  transform: translateX(-50%);
+  width: 280px;
+  padding: 0.75rem 1rem 14px;
+  background: #1a1a1a;
+  border-radius: 16px;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+  z-index: calc(var(--agentation-z-index, 100000) + 1);
+  font-family: var(--agentation-font);
+  pointer-events: auto;
+  will-change: transform, opacity;
+
+  // Initial state (before the enter animation runs).
+  opacity: 0;
+
+  --ag-popup-accent: var(--agentation-color-accent);
+
+  &.is-multi {
+    --ag-popup-accent: var(--agentation-color-green);
+  }
+
+  &.is-enter {
+    animation: ag-popup-enter 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  // After the enter animation completes, hold a stable state.
+  &.is-entered {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+
+  &.is-exit {
+    animation: ag-popup-exit 0.15s ease-in forwards;
+  }
+
+  // Shake needs the entered state to be stable first.
+  &.is-entered.is-shaking {
+    animation: ag-popup-shake 0.25s ease-out;
+  }
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+.ag-popup,
+.ag-popup *,
+.ag-popup *::before,
+.ag-popup *::after {
+  box-sizing: border-box;
+}
+
+.ag-popup button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+// -----------------------------------------------------------------------------
+// Header
+// -----------------------------------------------------------------------------
+
+.ag-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5625rem;
+}
+
+.ag-popup-element {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.5);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.ag-popup-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.ag-popup-header-toggle[hidden],
+.ag-popup-element[hidden],
+.ag-popup-styles-wrapper[hidden],
+.ag-popup-quote[hidden],
+.ag-popup-delete-wrapper[hidden] {
+  display: none;
+}
+
+// Chevron rotates when the computed-styles accordion is open.
+.ag-popup-chevron {
+  color: rgba(255, 255, 255, 0.5);
+  // Matches the FAQ accordion easing of the original.
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+
+  &.is-expanded {
+    transform: rotate(90deg);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Computed styles accordion
+// -----------------------------------------------------------------------------
+
+// Height transition via `grid-template-rows`.
+// See: https://css-tricks.com/css-grid-can-do-auto-height-transitions/
+.ag-popup-styles-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+
+  &.is-expanded {
+    grid-template-rows: 1fr;
+  }
+}
+
+// `overflow: hidden` here is what makes the grid animation work.
+.ag-popup-styles-inner {
+  overflow: hidden;
+}
+
+.ag-popup-styles-block {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  margin-bottom: 0.5rem;
+  font-family: var(--agentation-mono);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.ag-popup-style-line {
+  color: rgba(255, 255, 255, 0.85);
+  word-break: break-word;
+}
+
+.ag-popup-style-property {
+  color: #c792ea;
+}
+
+.ag-popup-style-value {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+// -----------------------------------------------------------------------------
+// Quote
+// -----------------------------------------------------------------------------
+
+.ag-popup-quote {
+  font-size: 12px;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 0.25rem;
+  line-height: 1.45;
+}
+
+// -----------------------------------------------------------------------------
+// Textarea
+// -----------------------------------------------------------------------------
+
+.ag-popup-textarea {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s ease;
+
+  &:focus {
+    border-color: var(--ag-popup-accent);
+  }
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Actions
+// -----------------------------------------------------------------------------
+
+.ag-popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.ag-popup-cancel,
+.ag-popup-submit {
+  padding: 0.4rem 0.875rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 1rem;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.ag-popup-cancel {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+  }
+}
+
+// `aria-disabled` rather than `disabled`: an empty draft must still be
+// clickable so the popup can shake and announce why nothing happened.
+.ag-popup-submit {
+  background: var(--ag-popup-accent);
+  color: white;
+
+  &:hover:not([aria-disabled="true"]) {
+    filter: brightness(0.9);
+  }
+
+  &[aria-disabled="true"] {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.ag-popup-delete-wrapper {
+  margin-right: auto;
+}
+
+.ag-popup-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+
+  &:hover {
+    background-color: color-mix(
+      in srgb,
+      var(--agentation-color-red) 25%,
+      transparent
+    );
+    color: var(--agentation-color-red);
+  }
+
+  &:active {
+    transform: scale(0.92);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Light theme
+// -----------------------------------------------------------------------------
+
+.ag-popup.is-light {
+  background: #fff;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  .ag-popup-element {
+    color: rgba(0, 0, 0, 0.6);
+  }
+
+  .ag-popup-chevron {
+    color: rgba(0, 0, 0, 0.4);
+  }
+
+  .ag-popup-styles-block {
+    background: rgba(0, 0, 0, 0.03);
+  }
+
+  .ag-popup-style-line {
+    color: rgba(0, 0, 0, 0.75);
+  }
+
+  .ag-popup-style-property {
+    color: #7c3aed;
+  }
+
+  .ag-popup-style-value {
+    color: rgba(0, 0, 0, 0.75);
+  }
+
+  .ag-popup-quote {
+    color: rgba(0, 0, 0, 0.55);
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  .ag-popup-textarea {
+    background: rgba(0, 0, 0, 0.03);
+    color: #1a1a1a;
+    border-color: rgba(0, 0, 0, 0.12);
+
+    &::placeholder {
+      color: rgba(0, 0, 0, 0.4);
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.15);
+    }
+  }
+
+  .ag-popup-cancel {
+    color: rgba(0, 0, 0, 0.5);
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.06);
+      color: rgba(0, 0, 0, 0.75);
+    }
+  }
+
+  .ag-popup-delete {
+    color: rgba(0, 0, 0, 0.4);
+  }
+}

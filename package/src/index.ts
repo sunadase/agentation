@@ -29,15 +29,9 @@ export type {
 } from "./browser/types";
 export { createReactMetadataAdapter } from "./metadata/react";
 
-// Shared components (for building custom UIs)
-export { AnnotationPopupCSS } from "./components/annotation-popup-css";
-export type {
-  AnnotationPopupCSSProps,
-  AnnotationPopupCSSHandle,
-} from "./components/annotation-popup-css";
-
-// Icons (same for both versions - they're pure SVG)
-export * from "./components/icons";
+// React-only presentational helpers (`AnnotationPopupCSS`, the icon set) moved
+// to the `agentation/react/ui` subpath in 4.0 so that importing the toolbar
+// never pulls React-rendered UI into the graph.
 
 // Utilities (for building custom UIs)
 export {

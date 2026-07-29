@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import styles from "./styles.module.scss";
 import { IconTrash } from "../icons";
-import { originalSetTimeout } from "../../utils/freeze-animations";
+import { getUnfrozenScheduler } from "../../utils/freeze-animations";
 
 // =============================================================================
 // Helpers
@@ -95,8 +95,17 @@ export const AnnotationPopupCSS = forwardRef<AnnotationPopupCSSHandle, Annotatio
     const [isStylesExpanded, setIsStylesExpanded] = useState(false); // Computed styles accordion state
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const popupRef = useRef<HTMLDivElement>(null);
-    const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const shakeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Handles come from the owning window's scheduler, so they are DOM timer
+    // ids (numbers) rather than Node's `Timeout` objects.
+    const cancelTimerRef = useRef<number | null>(null);
+    const shakeTimerRef = useRef<number | null>(null);
+
+    // Timers that keep running while the page is frozen, resolved from the
+    // document that actually owns this popup rather than a patched global.
+    const unfrozen = () =>
+      getUnfrozenScheduler(
+        popupRef.current?.ownerDocument ?? (typeof document === "undefined" ? undefined : document),
+      );
 
     // Sync with parent exit state
     useEffect(() => {
@@ -107,15 +116,16 @@ export const AnnotationPopupCSS = forwardRef<AnnotationPopupCSSHandle, Annotatio
 
     // Animate in on mount and focus textarea
     useEffect(() => {
-      // Start enter animation (use originalSetTimeout to bypass freeze patch)
-      originalSetTimeout(() => {
+      const timers = unfrozen();
+      // Start enter animation on unfrozen timers so a frozen page still shows it.
+      timers.setTimeout(() => {
         setAnimState("enter");
       }, 0);
       // Transition to entered state after animation completes
-      const enterTimer = originalSetTimeout(() => {
+      const enterTimer = timers.setTimeout(() => {
         setAnimState("entered");
       }, 200); // Match animation duration
-      const focusTimer = originalSetTimeout(() => {
+      const focusTimer = timers.setTimeout(() => {
         const textarea = textareaRef.current;
         if (textarea) {
           focusBypassingTraps(textarea);
@@ -135,7 +145,7 @@ export const AnnotationPopupCSS = forwardRef<AnnotationPopupCSSHandle, Annotatio
     const shake = useCallback(() => {
       if (shakeTimerRef.current) clearTimeout(shakeTimerRef.current);
       setIsShaking(true);
-      shakeTimerRef.current = originalSetTimeout(() => {
+      shakeTimerRef.current = unfrozen().setTimeout(() => {
         setIsShaking(false);
         focusBypassingTraps(textareaRef.current);
       }, 250);
@@ -149,7 +159,7 @@ export const AnnotationPopupCSS = forwardRef<AnnotationPopupCSSHandle, Annotatio
     // Handle cancel with exit animation
     const handleCancel = useCallback(() => {
       setAnimState("exit");
-      cancelTimerRef.current = originalSetTimeout(() => {
+      cancelTimerRef.current = unfrozen().setTimeout(() => {
         onCancel();
       }, 150); // Match exit animation duration
     }, [onCancel]);
@@ -202,7 +212,7 @@ export const AnnotationPopupCSS = forwardRef<AnnotationPopupCSSHandle, Annotatio
                 setIsStylesExpanded(!isStylesExpanded);
                 if (wasExpanded) {
                   // Refocus textarea when closing
-                  originalSetTimeout(() => focusBypassingTraps(textareaRef.current), 0);
+                  unfrozen().setTimeout(() => focusBypassingTraps(textareaRef.current), 0);
                 }
               }}
               type="button"

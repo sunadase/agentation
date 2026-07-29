@@ -1,0 +1,20 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "container": {
+    "collapsed": {
+      "x": 1376,
+      "y": 836,
+      "width": 44,
+      "height": 44
+    },
+    "expanded": {
+      "x": 1111,
+      "y": 824,
+      "width": 309,
+      "height": 56
+    }
+  }
+}

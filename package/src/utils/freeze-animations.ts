@@ -2,172 +2,227 @@
 // Freeze Animations
 // =============================================================================
 //
-// Monkey-patches setTimeout, setInterval, and requestAnimationFrame so that
-// callbacks are silently skipped while frozen. Also injects CSS to pause
-// CSS animations/transitions, pauses WAAPI animations, and pauses videos.
+// Pauses CSS animations/transitions, WAAPI animations and videos, and wraps the
+// owning window's timer functions so page callbacks are queued (setTimeout,
+// requestAnimationFrame) or skipped (setInterval) while frozen.
 //
-// Toolbar/popup code must import `originalSetTimeout` etc. to bypass the patch.
-//
-// Patches are installed as a side effect of importing this module.
+// Importing this module mutates nothing. Wrappers are installed when the first
+// controller for a window is created and removed when the last one is
+// destroyed, so `import "agentation"` never patches globals and SSR is safe.
 // =============================================================================
 
-// Exclude selectors — agentation UI elements should never be frozen
+export type UnfrozenScheduler = Pick<
+  Window,
+  | "setTimeout"
+  | "clearTimeout"
+  | "setInterval"
+  | "clearInterval"
+  | "requestAnimationFrame"
+  | "cancelAnimationFrame"
+>;
+
+export interface AnimationFreezeController {
+  readonly frozen: boolean;
+  freeze(): void;
+  unfreeze(): void;
+  destroy(): void;
+  /** Timer functions that keep running while the page is frozen. */
+  readonly scheduler: UnfrozenScheduler;
+}
+
+// Agentation's own UI must never be frozen. The legacy React attributes are
+// retained so a retained React popup keeps animating; the native runtime marks
+// every node it owns with `data-agentation-ui` inside `<agentation-overlay>`.
 const EXCLUDE_ATTRS = [
   "data-feedback-toolbar",
   "data-annotation-popup",
   "data-annotation-marker",
+  "data-agentation-ui",
 ];
-const NOT_SELECTORS = EXCLUDE_ATTRS
-  .flatMap((a) => [`:not([${a}])`, `:not([${a}] *)`])
-  .join("");
+const NOT_SELECTORS = [
+  ...EXCLUDE_ATTRS.flatMap((attribute) => [`:not([${attribute}])`, `:not([${attribute}] *)`]),
+  ":not(agentation-overlay)",
+  ":not(agentation-overlay *)",
+].join("");
 
 const STYLE_ID = "feedback-freeze-styles";
-const STATE_KEY = "__agentation_freeze";
+const STATE_KEY = "__agentationFreezeState";
 
-// ---------------------------------------------------------------------------
-// Shared mutable state on window (survives HMR module re-execution)
-// ---------------------------------------------------------------------------
-interface FreezeState {
-  frozen: boolean;
+type WindowFreezeState = {
+  /** Live controllers for this window. Wrappers are installed while > 0. */
+  controllers: number;
+  /** Controllers currently requesting a freeze. */
+  freezeDepth: number;
   installed: boolean;
-  origSetTimeout: typeof setTimeout;
-  origSetInterval: typeof setInterval;
-  origRAF: typeof requestAnimationFrame;
-  // Queues live on window so they survive HMR module re-execution
+  original: UnfrozenScheduler;
+  /**
+   * Property descriptors as found before patching, so uninstalling leaves the
+   * window byte-identical. Restoring by plain assignment would leave behind an
+   * own property shadowing an inherited one, which breaks any other library
+   * that patches the same timers by descriptor.
+   */
+  descriptors: Map<string, PropertyDescriptor | undefined>;
+  timeoutQueue: Array<() => void>;
+  rafQueue: FrameRequestCallback[];
   pausedAnimations: Animation[];
-  frozenTimeoutQueue: Array<() => void>;
-  frozenRAFQueue: FrameRequestCallback[];
+};
+
+type FreezeWindow = Window & { [STATE_KEY]?: WindowFreezeState };
+
+function nativeScheduler(view: Window): UnfrozenScheduler {
+  return {
+    setTimeout: view.setTimeout.bind(view) as Window["setTimeout"],
+    clearTimeout: view.clearTimeout.bind(view),
+    setInterval: view.setInterval.bind(view) as Window["setInterval"],
+    clearInterval: view.clearInterval.bind(view),
+    requestAnimationFrame: view.requestAnimationFrame?.bind(view) as Window["requestAnimationFrame"],
+    cancelAnimationFrame: view.cancelAnimationFrame?.bind(view) as Window["cancelAnimationFrame"],
+  };
 }
 
-function getState(): FreezeState {
-  if (typeof window === "undefined") {
-    // SSR stub
-    return {
-      frozen: false,
-      installed: true, // prevent patching on server
-      origSetTimeout: setTimeout,
-      origSetInterval: setInterval,
-      origRAF: (cb: FrameRequestCallback) => 0 as any,
-      pausedAnimations: [],
-      frozenTimeoutQueue: [],
-      frozenRAFQueue: [],
-    };
-  }
-  const w = window as any;
-  if (!w[STATE_KEY]) {
-    w[STATE_KEY] = {
-      frozen: false,
+function readState(view: FreezeWindow): WindowFreezeState {
+  let state = view[STATE_KEY];
+  if (!state) {
+    state = {
+      controllers: 0,
+      freezeDepth: 0,
       installed: false,
-      origSetTimeout: null,
-      origSetInterval: null,
-      origRAF: null,
+      original: nativeScheduler(view),
+      descriptors: new Map(),
+      timeoutQueue: [],
+      rafQueue: [],
       pausedAnimations: [],
-      frozenTimeoutQueue: [],
-      frozenRAFQueue: [],
+    };
+    view[STATE_KEY] = state;
+  }
+  return state;
+}
+
+function install(view: FreezeWindow, state: WindowFreezeState): void {
+  if (state.installed) return;
+  const patched = view as unknown as Record<string, unknown>;
+
+  const patch = (name: string, value: unknown): void => {
+    state.descriptors.set(name, Object.getOwnPropertyDescriptor(view, name));
+    patched[name] = value;
+  };
+
+  patch("setTimeout", (handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    if (typeof handler === "string") return state.original.setTimeout(handler, timeout);
+    return state.original.setTimeout(
+      (...called: unknown[]) => {
+        if (state.freezeDepth > 0) {
+          state.timeoutQueue.push(() => (handler as (...a: unknown[]) => void)(...called));
+          return;
+        }
+        (handler as (...a: unknown[]) => void)(...called);
+      },
+      timeout,
+      ...args,
+    );
+  });
+
+  patch("setInterval", (handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+    if (typeof handler === "string") return state.original.setInterval(handler, timeout);
+    return state.original.setInterval(
+      (...called: unknown[]) => {
+        if (state.freezeDepth > 0) return;
+        (handler as (...a: unknown[]) => void)(...called);
+      },
+      timeout,
+      ...args,
+    );
+  });
+
+  if (typeof state.original.requestAnimationFrame === "function") {
+    patch("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      state.original.requestAnimationFrame((timestamp) => {
+        if (state.freezeDepth > 0) {
+          state.rafQueue.push(callback);
+          return;
+        }
+        callback(timestamp);
+      }),
+    );
+  }
+
+  state.installed = true;
+}
+
+function uninstall(view: FreezeWindow, state: WindowFreezeState): void {
+  if (!state.installed) return;
+  for (const [name, descriptor] of state.descriptors) {
+    if (descriptor) Object.defineProperty(view, name, descriptor);
+    else delete (view as unknown as Record<string, unknown>)[name];
+  }
+  state.descriptors.clear();
+  state.installed = false;
+  state.timeoutQueue = [];
+  state.rafQueue = [];
+}
+
+/**
+ * Timer functions that bypass the freeze wrappers for the given document. Safe
+ * to call whether or not a freeze controller exists — importing this module
+ * still installs nothing.
+ */
+export function getUnfrozenScheduler(document: Document | undefined): UnfrozenScheduler {
+  const view = document?.defaultView as FreezeWindow | null | undefined;
+  if (!view) {
+    const noop = () => 0;
+    return {
+      setTimeout: noop as unknown as Window["setTimeout"],
+      clearTimeout: () => undefined,
+      setInterval: noop as unknown as Window["setInterval"],
+      clearInterval: () => undefined,
+      requestAnimationFrame: noop as unknown as Window["requestAnimationFrame"],
+      cancelAnimationFrame: () => undefined,
     };
   }
-  return w[STATE_KEY];
+  const existing = view[STATE_KEY];
+  return existing ? existing.original : nativeScheduler(view);
 }
 
-const _s = getState();
+export function createAnimationFreezeController(
+  document: Document,
+): AnimationFreezeController {
+  const view = document.defaultView as FreezeWindow | null;
+  if (!view) throw new Error("Agentation requires a Document attached to a Window");
 
-// ---------------------------------------------------------------------------
-// Install patches (once — survives HMR because `installed` lives on window)
-// ---------------------------------------------------------------------------
-if (typeof window !== "undefined" && !_s.installed) {
-  // Save the real functions
-  _s.origSetTimeout = window.setTimeout.bind(window);
-  _s.origSetInterval = window.setInterval.bind(window);
-  _s.origRAF = window.requestAnimationFrame.bind(window);
+  const state = readState(view);
+  state.controllers += 1;
+  install(view, state);
 
-  // Patch setTimeout — queue callback when frozen (replayed on unfreeze)
-  (window as any).setTimeout = (
-    handler: TimerHandler,
-    timeout?: number,
-    ...args: any[]
-  ): ReturnType<typeof setTimeout> => {
-    if (typeof handler === "string") {
-      return _s.origSetTimeout(handler, timeout);
-    }
-    return _s.origSetTimeout(
-      (...a: any[]) => {
-        if (_s.frozen) {
-          _s.frozenTimeoutQueue.push(() => (handler as Function)(...a));
-        } else {
-          (handler as Function)(...a);
-        }
-      },
-      timeout,
-      ...args,
-    );
+  let frozen = false;
+  let destroyed = false;
+
+  const excluded = (element: Element | null): boolean => {
+    if (!element) return false;
+    if (element.closest?.("agentation-overlay")) return true;
+    return EXCLUDE_ATTRS.some((attribute) => Boolean(element.closest?.(`[${attribute}]`)));
   };
 
-  // Patch setInterval — skip callback when frozen
-  (window as any).setInterval = (
-    handler: TimerHandler,
-    timeout?: number,
-    ...args: any[]
-  ): ReturnType<typeof setInterval> => {
-    if (typeof handler === "string") {
-      return _s.origSetInterval(handler, timeout);
-    }
-    return _s.origSetInterval(
-      (...a: any[]) => {
-        if (!_s.frozen) (handler as Function)(...a);
-      },
-      timeout,
-      ...args,
-    );
-  };
+  const controller: AnimationFreezeController = {
+    get frozen() {
+      return frozen;
+    },
+    scheduler: state.original,
 
-  // Patch requestAnimationFrame — queue callback when frozen (no CPU spin)
-  // The wrapper fires once on the next frame; if still frozen the callback
-  // is stored in _s.frozenRAFQueue and replayed on unfreeze.
-  (window as any).requestAnimationFrame = (
-    callback: FrameRequestCallback,
-  ): number => {
-    return _s.origRAF((timestamp: number) => {
-      if (_s.frozen) {
-        _s.frozenRAFQueue.push(callback);
-      } else {
-        callback(timestamp);
+    freeze() {
+      if (destroyed || frozen) return;
+      frozen = true;
+      state.freezeDepth += 1;
+      if (state.freezeDepth > 1) return;
+
+      state.timeoutQueue = [];
+      state.rafQueue = [];
+
+      let style = document.getElementById(STYLE_ID);
+      if (!style) {
+        style = document.createElement("style");
+        style.id = STYLE_ID;
       }
-    });
-  };
-
-  _s.installed = true;
-}
-
-// ---------------------------------------------------------------------------
-// Exports — original (unpatched) timing functions for toolbar/popup use
-// ---------------------------------------------------------------------------
-export const originalSetTimeout = _s.origSetTimeout;
-export const originalSetInterval = _s.origSetInterval;
-export const originalRequestAnimationFrame = _s.origRAF;
-
-// ---------------------------------------------------------------------------
-// Freeze / Unfreeze
-// ---------------------------------------------------------------------------
-
-function isAgentationElement(el: Element | null): boolean {
-  if (!el) return false;
-  return EXCLUDE_ATTRS.some((attr) => !!el.closest?.(`[${attr}]`));
-}
-
-export function freeze(): void {
-  if (typeof document === "undefined") return;
-  if (_s.frozen) return;
-  _s.frozen = true;
-  _s.frozenTimeoutQueue = [];
-  _s.frozenRAFQueue = [];
-
-  // CSS injection — pause CSS animations and kill transitions
-  let style = document.getElementById(STYLE_ID);
-  if (!style) {
-    style = document.createElement("style");
-    style.id = STYLE_ID;
-  }
-  style.textContent = `
+      style.textContent = `
     *${NOT_SELECTORS},
     *${NOT_SELECTORS}::before,
     *${NOT_SELECTORS}::after {
@@ -175,92 +230,102 @@ export function freeze(): void {
       transition: none !important;
     }
   `;
-  document.head.appendChild(style);
+      document.head.appendChild(style);
 
-  // WAAPI — pause only RUNNING non-agentation animations and store references
-  // (pausing finished animations would restart them on play(), breaking entrance anims)
-  _s.pausedAnimations = [];
-  try {
-    document.getAnimations().forEach((anim) => {
-      if (anim.playState !== "running") return;
-      const target = (anim.effect as KeyframeEffect)?.target as Element | null;
-      if (!isAgentationElement(target)) {
-        anim.pause();
-        _s.pausedAnimations.push(anim);
-      }
-    });
-  } catch {
-    // getAnimations may not be available in all environments
-  }
-
-  // Pause videos
-  document.querySelectorAll("video").forEach((video) => {
-    if (!video.paused) {
-      video.dataset.wasPaused = "false";
-      video.pause();
-    }
-  });
-}
-
-export function unfreeze(): void {
-  if (typeof document === "undefined") return;
-  if (!_s.frozen) return;
-  _s.frozen = false;
-
-  // Replay queued setTimeout callbacks asynchronously (resolves stuck delay()
-  // Promises, restarts animation loops interrupted by visibilitychange, etc.)
-  // Using origSetTimeout(cb, 0) avoids blocking the main thread in one go.
-  // Re-check _s.frozen before executing — if freeze() was called again between
-  // scheduling and execution, re-queue the callback instead of running it.
-  const timeoutQueue = _s.frozenTimeoutQueue;
-  _s.frozenTimeoutQueue = [];
-  for (const cb of timeoutQueue) {
-    _s.origSetTimeout(() => {
-      if (_s.frozen) {
-        _s.frozenTimeoutQueue.push(cb);
-        return;
-      }
+      // Pausing a *finished* animation restarts it on play(), which would
+      // replay entrance animations, so only running ones are captured.
+      state.pausedAnimations = [];
       try {
-        cb();
-      } catch (e) {
-        console.warn("[agentation] Error replaying queued timeout:", e);
+        for (const animation of document.getAnimations?.() ?? []) {
+          if (animation.playState !== "running") continue;
+          const target = (animation.effect as KeyframeEffect | null)?.target ?? null;
+          if (excluded(target)) continue;
+          animation.pause();
+          state.pausedAnimations.push(animation);
+        }
+      } catch {
+        // Degrade without throwing where getAnimations is unavailable.
       }
-    }, 0);
-  }
 
-  // Schedule queued rAF callbacks for the next frame.
-  // Re-check _s.frozen — if re-frozen before the frame fires, re-queue.
-  const rafQueue = _s.frozenRAFQueue;
-  _s.frozenRAFQueue = [];
-  for (const cb of rafQueue) {
-    _s.origRAF((ts: number) => {
-      if (_s.frozen) {
-        _s.frozenRAFQueue.push(cb);
-        return;
+      for (const video of document.querySelectorAll("video")) {
+        if (!video.paused) {
+          video.dataset.wasPaused = "false";
+          video.pause();
+        }
       }
-      cb(ts);
-    });
-  }
+    },
 
-  // WAAPI — resume the exact animations we paused BEFORE removing CSS
-  // (removing CSS first can cause the browser to replace animation objects)
-  for (const anim of _s.pausedAnimations) {
-    try {
-      anim.play();
-    } catch (e) {
-      console.warn("[agentation] Error resuming animation:", e);
-    }
-  }
-  _s.pausedAnimations = [];
+    unfreeze() {
+      if (!frozen) return;
+      frozen = false;
+      state.freezeDepth = Math.max(0, state.freezeDepth - 1);
+      if (state.freezeDepth > 0) return;
 
-  // Now remove CSS injection
-  document.getElementById(STYLE_ID)?.remove();
+      const timeoutQueue = state.timeoutQueue;
+      state.timeoutQueue = [];
+      for (const callback of timeoutQueue) {
+        state.original.setTimeout(() => {
+          if (state.freezeDepth > 0) {
+            state.timeoutQueue.push(callback);
+            return;
+          }
+          try {
+            callback();
+          } catch (error) {
+            console.warn("[agentation] Error replaying queued timeout:", error);
+          }
+        }, 0);
+      }
 
-  // Resume videos
-  document.querySelectorAll("video").forEach((video) => {
-    if (video.dataset.wasPaused === "false") {
-      video.play().catch(() => {});
-      delete video.dataset.wasPaused;
-    }
-  });
+      const rafQueue = state.rafQueue;
+      state.rafQueue = [];
+      if (typeof state.original.requestAnimationFrame === "function") {
+        for (const callback of rafQueue) {
+          state.original.requestAnimationFrame((timestamp) => {
+            if (state.freezeDepth > 0) {
+              state.rafQueue.push(callback);
+              return;
+            }
+            callback(timestamp);
+          });
+        }
+      }
+
+      // Resume the exact animations we paused *before* dropping the CSS:
+      // removing it first can make the browser replace the animation objects.
+      for (const animation of state.pausedAnimations) {
+        try {
+          animation.play();
+        } catch (error) {
+          console.warn("[agentation] Error resuming animation:", error);
+        }
+      }
+      state.pausedAnimations = [];
+
+      document.getElementById(STYLE_ID)?.remove();
+
+      for (const video of document.querySelectorAll("video")) {
+        if (video.dataset.wasPaused === "false") {
+          void video.play().catch(() => undefined);
+          delete video.dataset.wasPaused;
+        }
+      }
+    },
+
+    destroy() {
+      if (destroyed) return;
+      controller.unfreeze();
+      destroyed = true;
+      state.controllers = Math.max(0, state.controllers - 1);
+      if (state.controllers > 0) return;
+      uninstall(view, state);
+      // Drop the cache with the last controller. `state.original` holds bound
+      // references to the window's timer functions as they were when the first
+      // controller appeared; keeping them would pin a torn-down realm's
+      // functions and make a later controller schedule through stale ones.
+      delete view[STATE_KEY];
+    },
+  };
+
+  return controller;
 }

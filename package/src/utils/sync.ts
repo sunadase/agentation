@@ -25,12 +25,14 @@ export async function listSessions(endpoint: string): Promise<Session[]> {
  */
 export async function createSession(
   endpoint: string,
-  url: string
+  url: string,
+  signal?: AbortSignal
 ): Promise<Session> {
   const response = await fetch(`${endpoint}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
+    signal,
   });
 
   if (!response.ok) {
@@ -45,9 +47,10 @@ export async function createSession(
  */
 export async function getSession(
   endpoint: string,
-  sessionId: string
+  sessionId: string,
+  signal?: AbortSignal
 ): Promise<SessionWithAnnotations> {
-  const response = await fetch(`${endpoint}/sessions/${sessionId}`);
+  const response = await fetch(`${endpoint}/sessions/${sessionId}`, { signal });
 
   if (!response.ok) {
     throw new Error(`Failed to get session: ${response.status}`);
@@ -63,12 +66,14 @@ export async function getSession(
 export async function syncAnnotation(
   endpoint: string,
   sessionId: string,
-  annotation: Annotation
+  annotation: Annotation,
+  signal?: AbortSignal
 ): Promise<Annotation> {
   const response = await fetch(`${endpoint}/sessions/${sessionId}/annotations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(annotation),
+    signal,
   });
 
   if (!response.ok) {
@@ -84,12 +89,14 @@ export async function syncAnnotation(
 export async function updateAnnotation(
   endpoint: string,
   annotationId: string,
-  data: Partial<Annotation>
+  data: Partial<Annotation>,
+  signal?: AbortSignal
 ): Promise<Annotation> {
   const response = await fetch(`${endpoint}/annotations/${annotationId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+    signal,
   });
 
   if (!response.ok) {
@@ -104,10 +111,12 @@ export async function updateAnnotation(
  */
 export async function deleteAnnotation(
   endpoint: string,
-  annotationId: string
+  annotationId: string,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await fetch(`${endpoint}/annotations/${annotationId}`, {
     method: "DELETE",
+    signal,
   });
 
   if (!response.ok) {
@@ -133,12 +142,14 @@ export type ActionResponse = {
 export async function requestAction(
   endpoint: string,
   sessionId: string,
-  output: string
+  output: string,
+  signal?: AbortSignal
 ): Promise<ActionResponse> {
   const response = await fetch(`${endpoint}/sessions/${sessionId}/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ output }),
+    signal,
   });
 
   if (!response.ok) {

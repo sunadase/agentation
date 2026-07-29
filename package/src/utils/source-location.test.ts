@@ -45,7 +45,7 @@ function attachReact18Fiber(
   randomSuffix = "abc123"
 ): void {
   // React 18 uses __reactFiber$ prefix with random suffix
-  (element as Record<string, unknown>)[`__reactFiber$${randomSuffix}`] = fiber;
+  (element as unknown as Record<string, unknown>)[`__reactFiber$${randomSuffix}`] = fiber;
 }
 
 function attachReact17Fiber(
@@ -54,7 +54,7 @@ function attachReact17Fiber(
   randomSuffix = "abc123"
 ): void {
   // React 17 uses __reactInternalInstance$ prefix
-  (element as Record<string, unknown>)[`__reactInternalInstance$${randomSuffix}`] =
+  (element as unknown as Record<string, unknown>)[`__reactInternalInstance$${randomSuffix}`] =
     fiber;
 }
 
@@ -175,7 +175,7 @@ function getFiberFromElement(element: HTMLElement): MockFiberNode | null {
     key.startsWith("__reactFiber$")
   );
   if (react18Key) {
-    return (element as Record<string, unknown>)[react18Key] as MockFiberNode;
+    return (element as unknown as Record<string, unknown>)[react18Key] as MockFiberNode;
   }
 
   // Try React 17 internal instance key (__reactInternalInstance$...)
@@ -183,7 +183,7 @@ function getFiberFromElement(element: HTMLElement): MockFiberNode | null {
     key.startsWith("__reactInternalInstance$")
   );
   if (react17Key) {
-    return (element as Record<string, unknown>)[react17Key] as MockFiberNode;
+    return (element as unknown as Record<string, unknown>)[react17Key] as MockFiberNode;
   }
 
   return null;
@@ -438,8 +438,8 @@ describe("Source Location Detection", () => {
 
     it("should return null for element with unrelated properties", () => {
       // Add some random properties that aren't React fibers
-      (testElement as Record<string, unknown>)["__someOtherLibrary$abc"] = {};
-      (testElement as Record<string, unknown>)["data-testid"] = "test";
+      (testElement as unknown as Record<string, unknown>)["__someOtherLibrary$abc"] = {};
+      (testElement as unknown as Record<string, unknown>)["data-testid"] = "test";
 
       const result = getSourceLocation(testElement);
 
@@ -448,8 +448,8 @@ describe("Source Location Detection", () => {
 
     it("should return null for element with partial fiber-like property name", () => {
       // Property name starts similarly but isn't valid
-      (testElement as Record<string, unknown>)["__reactFibe"] = {};
-      (testElement as Record<string, unknown>)["__reactInternalInstanc"] = {};
+      (testElement as unknown as Record<string, unknown>)["__reactFibe"] = {};
+      (testElement as unknown as Record<string, unknown>)["__reactInternalInstanc"] = {};
 
       const result = getSourceLocation(testElement);
 

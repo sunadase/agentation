@@ -1,13 +1,22 @@
-import type { Annotation, FrameworkMetadata } from "../types";
+import type { Annotation, FrameworkMetadata, OutputDetailLevel } from "../types";
 
 export type ElementMetadata = Omit<FrameworkMetadata, "name"> & {
   framework?: string;
 };
 
+/**
+ * Runtime state handed to metadata adapters so they can scale their own work
+ * to the detail level the user asked for. Adapters written against the
+ * original one-argument `inspect` signature remain structurally compatible.
+ */
+export type ElementMetadataContext = Readonly<{
+  outputDetail: OutputDetailLevel;
+}>;
+
 export interface ElementMetadataAdapter {
   readonly id: string;
   /** Best-effort, synchronous, side-effect-free metadata lookup. */
-  inspect(element: Element): ElementMetadata | undefined;
+  inspect(element: Element, context: ElementMetadataContext): ElementMetadata | undefined;
 }
 
 export type DemoAnnotation = {
@@ -28,7 +37,14 @@ export type AgentationEventDetail =
   | { type: "session-created"; sessionId: string }
   | {
       type: "error";
-      operation: "configuration" | "storage" | "sync" | "clipboard" | "webhook" | "metadata";
+      operation:
+        | "callback"
+        | "clipboard"
+        | "configuration"
+        | "metadata"
+        | "storage"
+        | "sync"
+        | "webhook";
       message: string;
       recoverable: boolean;
       cause?: unknown;

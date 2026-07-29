@@ -1,0 +1,131 @@
+// =============================================================================
+// Shadow-root design tokens
+// =============================================================================
+//
+// The original toolbar injected `#agentation-color-tokens` into `document.head`
+// and read `--agentation-color-*` from `:root`. Inside a shadow root the same
+// tokens are declared on `:host`, so nothing is written to the host page.
+//
+// Positioning and stacking stay *inherited* custom properties: a consumer sets
+// them on the host element (`.my-agentation { --agentation-toolbar-top: 1rem }`)
+// and shadow rules read them through `var(name, original-default)`. Declaring
+// defaults with `var()` fallbacks — rather than on `:host` — keeps consumer
+// declarations winning without specificity games.
+// =============================================================================
+
+@use "sass:list";
+
+$accents: (
+  "indigo": (#6155f5, color(display-p3 0.38 0.33 0.96)),
+  "blue": (#0088ff, color(display-p3 0 0.53 1)),
+  "cyan": (#00c3d0, color(display-p3 0 0.76 0.82)),
+  "green": (#34c759, color(display-p3 0.2 0.78 0.35)),
+  "yellow": (#ffcc00, color(display-p3 1 0.8 0)),
+  "orange": (#ff8d28, color(display-p3 1 0.55 0.16)),
+  "red": (#ff383c, color(display-p3 1 0.22 0.24)),
+);
+
+:host {
+  @each $id, $pair in $accents {
+    --agentation-color-#{$id}: #{list.nth($pair, 1)};
+  }
+
+  --agentation-color-accent: var(--agentation-color-blue);
+
+  // Neutral surface tokens (dark is the default theme, as in the original).
+  --agentation-surface: rgba(28, 28, 30, 0.72);
+  --agentation-surface-solid: #1c1c1e;
+  --agentation-surface-raised: rgba(44, 44, 46, 0.9);
+  --agentation-border: rgba(255, 255, 255, 0.12);
+  --agentation-border-strong: rgba(255, 255, 255, 0.2);
+  --agentation-text: rgba(255, 255, 255, 0.92);
+  --agentation-text-muted: rgba(255, 255, 255, 0.55);
+  --agentation-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --agentation-blur: saturate(180%) blur(20px);
+
+  --agentation-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    sans-serif;
+  --agentation-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+@supports (color: color(display-p3 0 0 0)) {
+  :host {
+    @each $id, $pair in $accents {
+      --agentation-color-#{$id}: #{list.nth($pair, 2)};
+    }
+  }
+}
+
+@each $id, $pair in $accents {
+  :host([data-agentation-accent="#{$id}"]) {
+    --agentation-color-accent: var(--agentation-color-#{$id});
+  }
+}
+
+:host([data-agentation-theme="light"]) {
+  --agentation-surface: rgba(255, 255, 255, 0.78);
+  --agentation-surface-solid: #ffffff;
+  --agentation-surface-raised: rgba(245, 245, 247, 0.92);
+  --agentation-border: rgba(0, 0, 0, 0.1);
+  --agentation-border-strong: rgba(0, 0, 0, 0.18);
+  --agentation-text: rgba(0, 0, 0, 0.88);
+  --agentation-text-muted: rgba(0, 0, 0, 0.5);
+  --agentation-shadow: 0 8px 32px rgba(0, 0, 0, 0.14), 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+// The host itself must never intercept pointer events; every interactive layer
+// re-enables them for its own subtree.
+:host {
+  all: initial;
+  position: static;
+  display: contents;
+  font-family: var(--agentation-font);
+  color: var(--agentation-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+:host([hidden]) {
+  display: none;
+}
+
+// Shared resets for every layer the runtime creates.
+.ag-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--agentation-z-index, 100000);
+  font-family: var(--agentation-font);
+}
+
+.ag-layer *,
+.ag-layer *::before,
+.ag-layer *::after {
+  box-sizing: border-box;
+}
+
+.ag-layer button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ag-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ag-disable-transitions :is(*, *::before, *::after) {
+  transition: none !important;
+}

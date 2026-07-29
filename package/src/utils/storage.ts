@@ -8,8 +8,8 @@
 
 import type { Annotation } from "../types";
 
-const STORAGE_PREFIX = "feedback-annotations-";
-const DEFAULT_RETENTION_DAYS = 7;
+export const STORAGE_PREFIX = "feedback-annotations-";
+export const DEFAULT_RETENTION_DAYS = 7;
 
 export function getStorageKey(pathname: string): string {
   return `${STORAGE_PREFIX}${pathname}`;
@@ -141,7 +141,7 @@ export function clearSyncMarkers(pathname: string): void {
 // Layout Mode Storage
 // =============================================================================
 
-const DESIGN_PREFIX = "agentation-design-";
+export const DESIGN_PREFIX = "agentation-design-";
 
 export function loadDesignPlacements<T = unknown>(pathname: string): T[] {
   if (typeof window === "undefined") return [];
@@ -176,7 +176,7 @@ export function clearDesignPlacements(pathname: string): void {
 // Rearrange Mode Storage
 // =============================================================================
 
-const REARRANGE_PREFIX = "agentation-rearrange-";
+export const REARRANGE_PREFIX = "agentation-rearrange-";
 
 export function loadRearrangeState<T = unknown>(pathname: string): T | null {
   if (typeof window === "undefined") return null;
@@ -211,7 +211,7 @@ export function clearRearrangeState(pathname: string): void {
 // Wireframe Storage (persists wireframe state across page refresh)
 // =============================================================================
 
-const WIREFRAME_PREFIX = "agentation-wireframe-";
+export const WIREFRAME_PREFIX = "agentation-wireframe-";
 
 export function loadWireframeState<T = unknown>(pathname: string): { rearrange: T | null; placements: unknown[]; purpose: string } | null {
   if (typeof window === "undefined") return null;
@@ -246,7 +246,7 @@ export function clearWireframeState(pathname: string): void {
 // Session Storage
 // =============================================================================
 
-const SESSION_PREFIX = "agentation-session-";
+export const SESSION_PREFIX = "agentation-session-";
 
 export function getSessionStorageKey(pathname: string): string {
   return `${SESSION_PREFIX}${pathname}`;
@@ -283,7 +283,7 @@ export function clearSessionId(pathname: string): void {
 // Toolbar Visibility (per-tab session)
 // =============================================================================
 
-const TOOLBAR_HIDDEN_SESSION_KEY = `${SESSION_PREFIX}toolbar-hidden`;
+export const TOOLBAR_HIDDEN_SESSION_KEY = `${SESSION_PREFIX}toolbar-hidden`;
 
 export function loadToolbarHidden(): boolean {
   if (typeof window === "undefined") return false;

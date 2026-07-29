@@ -17,6 +17,17 @@ function scssModulesPlugin(): Plugin {
     setup(build) {
       // Handle all .scss files
       build.onLoad({ filter: /\.scss$/ }, async (args) => {
+        // `*.shadow.scss` compiles to a plain CSS string for injection into a
+        // shadow root. It must never touch `document`: the browser entry has to
+        // stay free of import-time DOM side effects.
+        if (args.path.endsWith(".shadow.scss")) {
+          const shadow = sass.compile(args.path, { style: "compressed" });
+          return {
+            contents: `export default ${JSON.stringify(shadow.css)};`,
+            loader: "js",
+          };
+        }
+
         const isModule = args.path.includes(".module.");
         // Use parent directory + filename for unique style IDs
         const parentDir = path.basename(path.dirname(args.path));
@@ -96,7 +107,11 @@ function browserSubpathPlugin(): Plugin {
 
 export default defineConfig((options) => [
   {
-    entry: ["src/index.ts"],
+    // Root and React-UI share a config: identical React externals, `"use
+    // client"` banner and SCSS handling. `splitting: false` keeps them from
+    // sharing a chunk, so the two dependency graphs stay independently
+    // verifiable by scripts/verify-artifacts.mjs.
+    entry: ["src/index.ts", "src/react-ui.ts"],
     format: ["cjs", "esm"],
     dts: true,
     splitting: false,

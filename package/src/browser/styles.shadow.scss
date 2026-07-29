@@ -1,0 +1,13 @@
+// Native Agentation shadow-root stylesheet.
+//
+// Region modules own their selectors; this file only fixes the composition order.
+// Keeping tokens first makes every subsequent region inherit the same theme and
+// accent contract without leaking a rule into the host document.
+@use "./view/tokens";
+@use "./view/icons";
+@use "./view/toolbar";
+@use "./view/settings";
+@use "./view/popup";
+@use "./view/markers";
+@use "./view/overlay";
+@use "./view/layout";

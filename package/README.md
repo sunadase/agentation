@@ -106,6 +106,19 @@ defineAgentationElement(window);
 document.body.append(document.createElement('agentation-overlay'));
 ```
 
+## React UI helpers
+
+The toolbar itself is a framework-neutral custom element, so the React-only
+presentational pieces live on their own subpath and pull in no runtime:
+
+```tsx
+import { AnnotationPopupCSS, IconCheck } from 'agentation/react/ui';
+```
+
+`AnnotationPopupCSS`, its types, and the icon set moved here in 4.0. They used
+to be re-exported from the root; importing them from `agentation` no longer
+works. `Agentation` itself is unchanged.
+
 ## Features
 
 - **Click to annotate** – Click any element with automatic selector identification
