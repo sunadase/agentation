@@ -304,6 +304,13 @@ type Annotation = {
   timestamp?: number;
   nearbyText?: string;
   reactComponents?: string;
+  sourceFile?: string;
+  framework?: {
+    name: string;
+    componentPath?: string[];
+    source?: { file: string; line?: number; column?: number };
+    confidence?: "exact" | "nearest" | "heuristic";
+  };
   status: string;
   kind?: "feedback" | "placement" | "rearrange";
   placement?: {
@@ -333,6 +340,9 @@ type PendingResponse = {
 
 /** Map an annotation to the shape returned by MCP tools */
 function mapAnnotationForMcp(a: Annotation) {
+  const componentPath = a.framework?.componentPath?.length
+    ? a.framework.componentPath.join(" > ")
+    : undefined;
   return {
     id: a.id,
     kind: a.kind || "feedback",
@@ -344,7 +354,17 @@ function mapAnnotationForMcp(a: Annotation) {
     severity: a.severity,
     timestamp: a.timestamp,
     nearbyText: a.nearbyText,
-    reactComponents: a.reactComponents,
+    // Where the element came from, for any framework. `confidence: "nearest"`
+    // means the location belongs to an ancestor, so the agent should widen its
+    // search rather than edit that exact line.
+    source: a.sourceFile,
+    componentPath,
+    framework: a.framework?.name,
+    confidence: a.framework?.confidence,
+    // Legacy React-only field, now derived: unchanged for React clients, absent
+    // for every other framework exactly as before.
+    reactComponents:
+      a.reactComponents ?? (a.framework?.name === "react" ? componentPath : undefined),
     ...(a.kind === "placement" && a.placement ? { placement: a.placement } : {}),
     ...(a.kind === "rearrange" && a.rearrange ? { rearrange: a.rearrange } : {}),
   };

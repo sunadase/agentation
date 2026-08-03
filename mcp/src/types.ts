@@ -20,7 +20,21 @@ export type Annotation = {
   accessibility?: string;
   isMultiSelect?: boolean; // true if created via drag selection
   isFixed?: boolean; // true if element has fixed/sticky positioning (marker stays fixed)
-  reactComponents?: string; // React component hierarchy (e.g. "<App> <Dashboard> <Button>")
+  /**
+   * Legacy React-only rendering of `framework.componentPath` (e.g.
+   * "App > Dashboard > Button"). Kept so existing React clients keep the exact
+   * field they read today; new consumers should use `framework` instead, which
+   * every metadata adapter fills regardless of framework.
+   */
+  reactComponents?: string;
+  /**
+   * Element provenance as reported by whichever metadata adapter claimed the
+   * element (React, Solid, or an app-supplied one). Stored verbatim so the
+   * server never has to know which frameworks exist.
+   */
+  framework?: FrameworkMetadata;
+  /** `file:line:column` for the annotated element, when the adapter resolved one. */
+  sourceFile?: string;
 
   // Annotation kind (defaults to "feedback" when undefined — backward compat)
   kind?: "feedback" | "placement" | "rearrange";
@@ -64,6 +78,25 @@ export type Annotation = {
 export type AnnotationIntent = "fix" | "change" | "question" | "approve";
 export type AnnotationSeverity = "blocking" | "important" | "suggestion";
 export type AnnotationStatus = "pending" | "acknowledged" | "resolved" | "dismissed";
+
+// -----------------------------------------------------------------------------
+// Element provenance
+// -----------------------------------------------------------------------------
+
+export type SourceLocation = {
+  file: string;
+  line?: number;
+  column?: number;
+};
+
+/** Mirror of the toolbar's `FrameworkMetadata`; `name` is the adapter id. */
+export type FrameworkMetadata = {
+  name: string;
+  componentPath?: string[];
+  source?: SourceLocation;
+  /** `nearest` means the location came from an ancestor, not the element. */
+  confidence?: "exact" | "nearest" | "heuristic";
+};
 
 // -----------------------------------------------------------------------------
 // Session
