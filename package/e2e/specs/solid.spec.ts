@@ -2,15 +2,10 @@
 // Solid adapter
 // =============================================================================
 //
-// The Solid fixture has its own Vite app and its own port, because Solid Devtools
-// instruments every `.tsx` client transform and would otherwise contaminate the
-// React parity oracle.
-//
-// The metadata contract is deliberately narrow: `agentationSolidMetadata()` runs
-// Solid Devtools with `jsxLocation` on and `componentLocation`/`key` off, so the
-// only promise is source file/line/column for native JSX elements. Component
-// ancestry is NOT promised — Solid Devtools exposes no stable public DOM-to-owner
-// registry — and this spec asserts the promise rather than a wish.
+// The Solid fixture has its own Vite app so JSX source instrumentation cannot
+// contaminate the React parity oracle. The metadata contract is deliberately
+// narrow: file/line/column for native JSX elements. Component ancestry is not
+// inferred; callers can supply it through the metadata adapter.
 // =============================================================================
 
 import { expect, test } from "@playwright/test";

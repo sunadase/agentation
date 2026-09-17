@@ -22,7 +22,7 @@ const manifestPath = path.join(packageRoot, "package.json");
 
 // Peers that may legitimately be absent from a consumer install. Sorted
 // longest-first so `react-dom` is reported instead of its `react` prefix.
-const OPTIONAL_PEERS = ["solid-devtools", "react-dom", "solid-js", "react", "vite"];
+const OPTIONAL_PEERS = ["react-dom", "solid-js", "react", "vite"];
 
 /**
  * Per-entry policy, keyed by the dist-relative path of the built ESM file.
@@ -46,8 +46,15 @@ const ENTRY_POLICY = {
     domFree: true,
     cjsSmoke: false,
   },
+  "solid2.mjs": {
+    externals: { allow: ["solid-js", "agentation/browser"] },
+    // This workspace installs Solid 1 for the existing wrapper. Solid 2's
+    // DOM-free import and lifecycle are exercised in the Solid 2 consumer.
+    domFree: false,
+    cjsSmoke: false,
+  },
   "solid-vite.mjs": {
-    externals: { allow: ["solid-devtools/vite", "vite"] },
+    externals: { allow: ["@babel/core", "node:path", "vite"] },
     domFree: false,
     cjsSmoke: false,
   },

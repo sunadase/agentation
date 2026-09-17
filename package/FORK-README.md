@@ -40,6 +40,16 @@ SolidJS — the reason this fork exists:
 import { Agentation } from 'agentation/solid';
 ```
 
+Solid 2 uses a separate lifecycle wrapper so the moving `pkg` branch continues
+to work for Solid 1 consumers:
+
+```tsx
+import { Agentation } from 'agentation/solid2';
+```
+
+Requires Solid `2.0.0-rc.8` or later in the 2.x line. The metadata plugin below
+works with either Solid compiler and no longer requires `solid-devtools`.
+
 Optionally add source file/line/column to annotations. The plugin is a no-op
 outside the development client, so production builds fall back to DOM and
 accessibility data:
@@ -62,7 +72,7 @@ const agentation = mountAgentation(document);
 // agentation.destroy() on HMR or teardown
 ```
 
-Available subpaths: `.`, `./browser`, `./solid`, `./solid/vite`,
+Available subpaths: `.`, `./browser`, `./solid`, `./solid2`, `./solid/vite`,
 `./metadata/react`, `./metadata/solid`, `./react/ui`.
 
 ## Version caveat

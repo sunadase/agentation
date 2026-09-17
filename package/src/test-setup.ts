@@ -25,12 +25,14 @@ Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
   value: storage,
 });
-Object.defineProperty(window, "localStorage", {
-  configurable: true,
-  value: storage,
-});
+if (typeof window !== "undefined") {
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
 
-Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-  configurable: true,
-  value: () => null,
-});
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value: () => null,
+  });
+}

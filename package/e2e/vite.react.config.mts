@@ -11,8 +11,8 @@
 // The legacy `PageFeedbackToolbarCSS` oracle used to be served here too. It is
 // now frozen to `specs/__snapshots__/oracle-*.png`; see `capture-oracle.ts`.
 //
-// Isolated from the Solid fixture on purpose: `solid-devtools` instruments every
-// `.tsx` client transform, so a shared server would contaminate the oracle.
+// Isolated from the Solid fixture on purpose: its source-location plugin
+// instruments native JSX, so a shared server would contaminate the oracle.
 // =============================================================================
 
 import { defineConfig } from "vite";

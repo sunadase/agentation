@@ -138,7 +138,7 @@ export default defineConfig((options) => [
     splitting: false,
     sourcemap: true,
     clean: false,
-    external: ["react", "react-dom", "solid-devtools/vite", "vite"],
+    external: ["react", "react-dom", "@babel/core", "vite"],
     esbuildPlugins: [scssModulesPlugin()],
     define: {
       __VERSION__: JSON.stringify(VERSION),
@@ -156,5 +156,21 @@ export default defineConfig((options) => [
     define: {
       __VERSION__: JSON.stringify(VERSION),
     },
+  },
+  {
+    entry: ["src/solid2.ts"],
+    format: ["cjs", "esm"],
+    dts: {
+      compilerOptions: {
+        baseUrl: ".",
+        paths: { "solid-js": ["./node_modules/solid-js2/types/index.d.ts"] },
+      },
+    },
+    splitting: false,
+    sourcemap: true,
+    clean: false,
+    external: ["solid-js", "agentation/browser"],
+    esbuildPlugins: [browserSubpathPlugin()],
+    define: { __VERSION__: JSON.stringify(VERSION) },
   },
 ]);

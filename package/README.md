@@ -36,7 +36,7 @@ The toolbar appears in the bottom-right corner. Click to activate, then click an
 ## SolidJS / SolidStart
 
 ```bash
-npm install agentation solid-devtools -D
+npm install agentation -D
 ```
 
 Add development-only source instrumentation before Solid's compiler:
@@ -77,6 +77,33 @@ export default function App() {
 
 Source instrumentation is optional. Without it, annotations still include DOM
 selectors, accessibility data, styles, text context, and geometry.
+
+### Solid 2
+
+Use `agentation/solid2` with Solid `2.0.0-rc.8` or later in the 2.x line.
+The existing `agentation/solid` entry remains for Solid 1.
+Both entries accept the same props and expose the same metadata APIs.
+
+```tsx
+import { Agentation } from 'agentation/solid2';
+
+// Mount only in the development client. For SSR applications, use the
+// framework's client-only boundary as well as the development flag.
+function DevAgentation() {
+  return import.meta.env.DEV ? <Agentation /> : null;
+}
+```
+
+The example illustrates the wrapper API, not bundle exclusion. To keep the
+toolbar out of production, gate the **module import** behind `import.meta.env.DEV`
+using your framework's client-only loader, as in the SolidStart example above
+(substitute `agentation/solid2`). A render-only condition around a static import
+can still ship the toolbar. Verify the production output.
+
+The same `agentation/solid/vite` plugin works before either Solid compiler.
+It stamps native JSX elements with `data-source-loc` using an AST transform;
+it does not install or depend on Solid Devtools. Production builds and SSR
+transforms are not instrumented.
 
 ## Browser and custom element
 
