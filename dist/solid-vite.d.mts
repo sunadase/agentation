@@ -5,14 +5,14 @@ type AgentationSolidMetadataOptions = {
     jsxLocation?: boolean;
 };
 /**
- * Dev-server-only Solid compiler instrumentation used by the Solid metadata
- * adapter. The Agentation toolbar still works without it and degrades to DOM
- * selectors and accessibility metadata.
+ * Dev-server-only JSX instrumentation used by the Solid metadata adapter.
+ * Works with both Solid compiler versions without a devtools runtime. The
+ * Agentation toolbar still works without it and degrades to DOM selectors and
+ * accessibility metadata.
  *
- * This only promises source file/line/column for native JSX elements. Automatic
- * Solid *component ancestry* is deliberately NOT promised: Solid Devtools
- * exposes no stable public DOM-to-owner registry, so component paths must come
- * from `SolidMetadataOptions.resolve` or an app-emitted `componentAttribute`.
+ * This only promises source file/line/column for native JSX elements. Component
+ * paths must come from `SolidMetadataOptions.resolve` or an app-emitted
+ * `componentAttribute`.
  */
 declare function agentationSolidMetadata(options?: AgentationSolidMetadataOptions): PluginOption;
 

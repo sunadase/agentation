@@ -8,7 +8,7 @@ type SolidMetadataOptions = {
      * over any DOM attribute lookup.
      */
     resolve?: SolidMetadataResolver;
-    /** Attribute emitted by solid-devtools/vite with locator.jsxLocation enabled. */
+    /** Attribute emitted by agentation/solid/vite. Defaults to data-source-loc. */
     sourceAttribute?: string;
     /**
      * Optional app/compiler attribute containing `App > Panel > Button`. Defaults

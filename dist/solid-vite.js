@@ -1,9 +1,7 @@
 "use strict";
-var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -17,14 +15,6 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/solid-vite.ts
@@ -34,15 +24,59 @@ __export(solid_vite_exports, {
   default: () => solid_vite_default
 });
 module.exports = __toCommonJS(solid_vite_exports);
-var import_vite = __toESM(require("solid-devtools/vite"));
+var import_core = require("@babel/core");
 function agentationSolidMetadata(options = {}) {
-  return (0, import_vite.default)({
-    locator: {
-      key: false,
-      jsxLocation: options.jsxLocation ?? true,
-      componentLocation: false
+  let enabled = false;
+  return {
+    name: "agentation-solid-metadata",
+    enforce: "pre",
+    apply: "serve",
+    configResolved(config) {
+      enabled = options.jsxLocation !== false && config.command === "serve" && !config.isProduction && !config.build.ssr;
+    },
+    async transform(code, id, transformOptions) {
+      if (!enabled || transformOptions?.ssr) return;
+      const filename = id.split(/[?#]/, 1)[0];
+      if (!/\.[jt]sx$/.test(filename) || /(^|[/\\])node_modules([/\\]|$)/.test(filename) || id.startsWith("\0") || /[?&](?:raw|url)(?:[=&]|$)/.test(id)) {
+        return;
+      }
+      let changed = false;
+      const result = await (0, import_core.transformAsync)(code, {
+        filename,
+        sourceFileName: filename,
+        babelrc: false,
+        configFile: false,
+        sourceMaps: true,
+        parserOpts: {
+          plugins: filename.endsWith(".tsx") ? ["jsx", "typescript"] : ["jsx"]
+        },
+        plugins: [
+          {
+            visitor: {
+              JSXOpeningElement(path) {
+                const { node } = path;
+                if (!import_core.types.isJSXIdentifier(node.name) || !/^[a-z]/.test(node.name.name) || !node.loc || node.attributes.some(
+                  (attribute) => import_core.types.isJSXAttribute(attribute) && import_core.types.isJSXIdentifier(attribute.name, { name: "data-source-loc" })
+                )) {
+                  return;
+                }
+                const { line, column } = node.loc.start;
+                node.attributes.unshift(
+                  import_core.types.jsxAttribute(
+                    import_core.types.jsxIdentifier("data-source-loc"),
+                    import_core.types.stringLiteral(`${filename}:${line}:${column + 1}`)
+                  )
+                );
+                changed = true;
+              }
+            }
+          }
+        ]
+      });
+      if (!changed || !result?.code) return;
+      return { code: result.code, map: result.map };
     }
-  });
+  };
 }
 var solid_vite_default = agentationSolidMetadata;
 // Annotate the CommonJS export names for ESM import in node:
